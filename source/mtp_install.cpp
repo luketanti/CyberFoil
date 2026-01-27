@@ -4,8 +4,8 @@
 
 #include <algorithm>
 #include <atomic>
-#include <map>
 #include <condition_variable>
+#include <cstddef>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -84,7 +84,6 @@ private:
     bool ParseHeaderIfReady();
     bool EnsureEntryStarted(EntryState& entry);
     bool WriteEntryData(EntryState& entry, const std::uint8_t* data, size_t size, std::uint64_t rel_offset);
-    void MaybeUpdateProgress(std::uint64_t received);
     bool CommitCnmt(EntryState& entry);
 
     NcmStorageId m_dest_storage = NcmStorageId_SdCard;
@@ -96,51 +95,7 @@ private:
     std::unique_ptr<class StreamInstallHelper> m_helper;
 };
 
-class MtpXciStream final : public StreamInstaller {
-public:
-    explicit MtpXciStream(std::uint64_t total_size, NcmStorageId dest_storage);
-
-    bool Feed(const void* buf, size_t size, std::uint64_t offset) override;
-    bool Finalize() override;
-
-private:
-    struct EntryState {
-        std::string name;
-        NcmContentId nca_id{};
-        std::uint64_t data_offset = 0;
-        std::uint64_t size = 0;
-        std::uint64_t written = 0;
-        bool started = false;
-        bool complete = false;
-        bool is_nca = false;
-        bool is_cnmt = false;
-        std::shared_ptr<nx::ncm::ContentStorage> storage;
-        std::unique_ptr<NcaWriter> nca_writer;
-        std::vector<std::uint8_t> ticket_buf;
-        std::vector<std::uint8_t> cert_buf;
-    };
-
-    bool ParseHeaderIfReady();
-    bool EnsureEntryStarted(EntryState& entry);
-    bool WriteEntryData(EntryState& entry, const std::uint8_t* data, size_t size, std::uint64_t rel_offset);
-    void MaybeUpdateProgress(std::uint64_t received);
-    bool CommitCnmt(EntryState& entry);
-    bool ProcessChunk(const std::uint8_t* data, size_t size, std::uint64_t offset);
-
-    NcmStorageId m_dest_storage = NcmStorageId_SdCard;
-    std::uint64_t m_total_size = 0;
-    std::uint64_t m_received = 0;
-    std::uint64_t m_next_offset = 0;
-    std::uint64_t m_header_offset = 0;
-    std::vector<std::uint8_t> m_header_bytes;
-    std::vector<std::uint8_t> m_header_bytes_alt;
-    std::vector<std::uint8_t> m_secure_header_bytes;
-    std::vector<EntryState> m_entries;
-    bool m_header_parsed = false;
-    std::uint64_t m_secure_header_offset = 0;
-    std::unique_ptr<class StreamInstallHelper> m_helper;
-    std::map<std::uint64_t, std::vector<std::uint8_t>> m_pending_chunks;
-};
+// XCI/XCZ streaming uses the pull-based installer below.
 
 std::unique_ptr<StreamInstaller> g_stream;
 
@@ -196,20 +151,7 @@ bool IsNspName(const std::string& name) {
     return ext == ".nsp" || ext == ".nsz";
 }
 
-void ShowInstallScreen(const std::string& name) {
-    inst::ui::instPage::loadInstallScreen();
-    inst::ui::instPage::setTopInstInfoText("inst.info_page.top_info0"_lang + name + " (MTP)");
-    inst::ui::instPage::setInstInfoText("inst.info_page.preparing"_lang);
-    inst::ui::instPage::setInstBarPerc(0);
-}
-
 MtpNspStream::MtpNspStream(std::uint64_t total_size, NcmStorageId dest_storage)
-    : m_dest_storage(dest_storage), m_total_size(total_size)
-{
-    m_helper = std::make_unique<StreamInstallHelper>(dest_storage, inst::config::ignoreReqVers);
-}
-
-MtpXciStream::MtpXciStream(std::uint64_t total_size, NcmStorageId dest_storage)
     : m_dest_storage(dest_storage), m_total_size(total_size)
 {
     m_helper = std::make_unique<StreamInstallHelper>(dest_storage, inst::config::ignoreReqVers);
@@ -335,13 +277,6 @@ bool MtpNspStream::WriteEntryData(EntryState& entry, const std::uint8_t* data, s
     return true;
 }
 
-void MtpNspStream::MaybeUpdateProgress(std::uint64_t received)
-{
-    if (!m_total_size) return;
-    double percent = (double)received / (double)m_total_size * 100.0;
-    inst::ui::instPage::setInstBarPerc(percent);
-}
-
 bool MtpNspStream::Feed(const void* buf, size_t size, std::uint64_t offset)
 {
     try {
@@ -396,301 +331,6 @@ bool MtpNspStream::Feed(const void* buf, size_t size, std::uint64_t offset)
 }
 
 bool MtpNspStream::Finalize()
-{
-    if (!m_helper) return true;
-
-    std::vector<std::vector<std::uint8_t>> tickets;
-    std::vector<std::vector<std::uint8_t>> certs;
-    for (const auto& entry : m_entries) {
-        if (entry.name.find(".tik") != std::string::npos) {
-            tickets.push_back(entry.ticket_buf);
-        }
-        if (entry.name.find(".cert") != std::string::npos) {
-            certs.push_back(entry.cert_buf);
-        }
-    }
-
-    const size_t count = std::min(tickets.size(), certs.size());
-    for (size_t i = 0; i < count; i++) {
-        if (!tickets[i].empty() && !certs[i].empty()) {
-            ASSERT_OK(esImportTicket(tickets[i].data(), tickets[i].size(), certs[i].data(), certs[i].size()),
-                "Failed to import ticket");
-        }
-    }
-
-    m_helper->CommitAll();
-    return true;
-}
-
-bool MtpXciStream::ParseHeaderIfReady()
-{
-    if (m_header_parsed) return true;
-    if (!m_header_offset) {
-        if (m_header_bytes.size() >= sizeof(tin::install::HFS0BaseHeader)) {
-            const auto* base = reinterpret_cast<const tin::install::HFS0BaseHeader*>(m_header_bytes.data());
-            if (base->magic == MAGIC_HFS0) {
-                m_header_offset = 0xf000;
-            }
-        }
-        if (!m_header_offset && m_header_bytes_alt.size() >= sizeof(tin::install::HFS0BaseHeader)) {
-            const auto* base = reinterpret_cast<const tin::install::HFS0BaseHeader*>(m_header_bytes_alt.data());
-            if (base->magic == MAGIC_HFS0) {
-                m_header_offset = 0x10000;
-                m_header_bytes.swap(m_header_bytes_alt);
-            }
-        }
-        if (!m_header_offset) {
-            if (m_header_bytes.size() >= sizeof(tin::install::HFS0BaseHeader) &&
-                m_header_bytes_alt.size() >= sizeof(tin::install::HFS0BaseHeader)) {
-                THROW_FORMAT("Invalid HFS0 magic");
-            }
-            return false;
-        }
-    }
-
-    if (m_header_bytes.size() < sizeof(tin::install::HFS0BaseHeader)) return false;
-
-    const auto* base = reinterpret_cast<const tin::install::HFS0BaseHeader*>(m_header_bytes.data());
-    if (base->magic != MAGIC_HFS0) {
-        THROW_FORMAT("Invalid HFS0 magic");
-    }
-
-    const size_t header_size = sizeof(tin::install::HFS0BaseHeader) +
-        base->numFiles * sizeof(tin::install::HFS0FileEntry) + base->stringTableSize;
-
-    if (m_header_bytes.size() < header_size) return false;
-    m_header_bytes.resize(header_size);
-
-    for (u32 i = 0; i < base->numFiles; i++) {
-        const auto* entry = tin::install::hfs0GetFileEntry(base, i);
-        const char* name = tin::install::hfs0GetFileName(base, entry);
-        if (std::strcmp(name, "secure") == 0) {
-            m_secure_header_offset = m_header_offset + header_size + entry->dataOffset;
-            break;
-        }
-    }
-
-    if (!m_secure_header_offset) return false;
-    if (m_secure_header_bytes.size() < sizeof(tin::install::HFS0BaseHeader)) return false;
-
-    const auto* secure_base = reinterpret_cast<const tin::install::HFS0BaseHeader*>(m_secure_header_bytes.data());
-    if (secure_base->magic != MAGIC_HFS0) {
-        THROW_FORMAT("Invalid secure HFS0 magic");
-    }
-
-    const size_t secure_header_size = sizeof(tin::install::HFS0BaseHeader) +
-        secure_base->numFiles * sizeof(tin::install::HFS0FileEntry) + secure_base->stringTableSize;
-
-    if (m_secure_header_bytes.size() < secure_header_size) return false;
-    m_secure_header_bytes.resize(secure_header_size);
-
-    m_entries.clear();
-    for (u32 i = 0; i < secure_base->numFiles; i++) {
-        const auto* entry = tin::install::hfs0GetFileEntry(secure_base, i);
-        const char* name = tin::install::hfs0GetFileName(secure_base, entry);
-        EntryState st;
-        st.name = name;
-        st.data_offset = m_secure_header_offset + secure_header_size + entry->dataOffset;
-        st.size = entry->fileSize;
-        st.is_nca = st.name.find(".nca") != std::string::npos || st.name.find(".ncz") != std::string::npos;
-        st.is_cnmt = st.name.find(".cnmt.nca") != std::string::npos || st.name.find(".cnmt.ncz") != std::string::npos;
-        if (st.is_nca && st.name.size() >= 32) {
-            st.nca_id = tin::util::GetNcaIdFromString(st.name.substr(0, 32));
-        }
-        m_entries.emplace_back(std::move(st));
-    }
-
-    m_header_parsed = true;
-    return true;
-}
-
-bool MtpXciStream::EnsureEntryStarted(EntryState& entry)
-{
-    if (entry.started) return true;
-    if (!entry.is_nca) {
-        entry.started = true;
-        return true;
-    }
-
-    entry.storage = std::make_shared<nx::ncm::ContentStorage>(m_dest_storage);
-    try {
-        entry.storage->DeletePlaceholder(*(NcmPlaceHolderId*)&entry.nca_id);
-    } catch (...) {}
-    entry.nca_writer = std::make_unique<NcaWriter>(entry.nca_id, entry.storage);
-    entry.started = true;
-    return true;
-}
-
-bool MtpXciStream::CommitCnmt(EntryState& entry)
-{
-    if (!entry.is_cnmt || !entry.storage) return false;
-
-    try {
-        std::string cnmt_path = entry.storage->GetPath(entry.nca_id);
-        nx::ncm::ContentMeta meta = tin::util::GetContentMetaFromNCA(cnmt_path);
-        {
-            const auto key = meta.GetContentMetaKey();
-            const auto base_id = tin::util::GetBaseTitleId(key.id, static_cast<NcmContentMetaType>(key.type));
-            g_stream_title_id.store(base_id, std::memory_order_relaxed);
-        }
-        NcmContentInfo cnmt_info{};
-        cnmt_info.content_id = entry.nca_id;
-        ncmU64ToContentInfoSize(entry.size & 0xFFFFFFFFFFFF, &cnmt_info);
-        cnmt_info.content_type = NcmContentType_Meta;
-        m_helper->AddContentMeta(meta, cnmt_info);
-        m_helper->CommitLatest();
-        return true;
-    } catch (...) {
-        return false;
-    }
-}
-
-bool MtpXciStream::WriteEntryData(EntryState& entry, const std::uint8_t* data, size_t size, std::uint64_t rel_offset)
-{
-    if (entry.name.find(".tik") != std::string::npos) {
-        entry.ticket_buf.insert(entry.ticket_buf.end(), data, data + size);
-        entry.written += size;
-        if (entry.written >= entry.size) {
-            entry.complete = true;
-        }
-        return true;
-    }
-    if (entry.name.find(".cert") != std::string::npos) {
-        entry.cert_buf.insert(entry.cert_buf.end(), data, data + size);
-        entry.written += size;
-        if (entry.written >= entry.size) {
-            entry.complete = true;
-        }
-        return true;
-    }
-
-    if (!entry.is_nca || !entry.nca_writer) return false;
-    if (rel_offset != entry.written) return false;
-    entry.nca_writer->write(data, size);
-    entry.written += size;
-    if (entry.written >= entry.size) {
-        entry.nca_writer->close();
-        try {
-            entry.storage->Register(*(NcmPlaceHolderId*)&entry.nca_id, entry.nca_id);
-            entry.storage->DeletePlaceholder(*(NcmPlaceHolderId*)&entry.nca_id);
-        } catch (...) {}
-        entry.complete = true;
-        if (entry.is_cnmt) {
-            CommitCnmt(entry);
-        }
-    }
-    return true;
-}
-
-void MtpXciStream::MaybeUpdateProgress(std::uint64_t received)
-{
-    if (!m_total_size) return;
-    double percent = (double)received / (double)m_total_size * 100.0;
-    inst::ui::instPage::setInstBarPerc(percent);
-}
-
-bool MtpXciStream::ProcessChunk(const std::uint8_t* data, size_t size, std::uint64_t offset)
-{
-    const u64 hfs0_offset = 0xf000;
-    const u64 hfs0_offset_alt = 0x10000;
-    const u64 header_max = 0x20000;
-    if (offset + size > hfs0_offset && offset < hfs0_offset + header_max) {
-        const auto start = std::max<std::uint64_t>(offset, hfs0_offset);
-        const auto end = std::min<std::uint64_t>(offset + size, hfs0_offset + header_max);
-        const auto rel = start - hfs0_offset;
-        const auto len = static_cast<size_t>(end - start);
-        if (m_header_bytes.size() < rel + len) {
-            m_header_bytes.resize(rel + len);
-        }
-        std::memcpy(m_header_bytes.data() + rel, data + (start - offset), len);
-    }
-    if (offset + size > hfs0_offset_alt && offset < hfs0_offset_alt + header_max) {
-        const auto start = std::max<std::uint64_t>(offset, hfs0_offset_alt);
-        const auto end = std::min<std::uint64_t>(offset + size, hfs0_offset_alt + header_max);
-        const auto rel = start - hfs0_offset_alt;
-        const auto len = static_cast<size_t>(end - start);
-        if (m_header_bytes_alt.size() < rel + len) {
-            m_header_bytes_alt.resize(rel + len);
-        }
-        std::memcpy(m_header_bytes_alt.data() + rel, data + (start - offset), len);
-    }
-
-    if (m_secure_header_offset && offset + size > m_secure_header_offset && offset < m_secure_header_offset + header_max) {
-        const auto start = std::max<std::uint64_t>(offset, m_secure_header_offset);
-        const auto end = std::min<std::uint64_t>(offset + size, m_secure_header_offset + header_max);
-        const auto rel = start - m_secure_header_offset;
-        const auto len = static_cast<size_t>(end - start);
-        if (m_secure_header_bytes.size() < rel + len) {
-            m_secure_header_bytes.resize(rel + len);
-        }
-        std::memcpy(m_secure_header_bytes.data() + rel, data + (start - offset), len);
-    }
-
-    if (!ParseHeaderIfReady()) {
-        return true;
-    }
-
-    for (auto& entry : m_entries) {
-        const auto entry_start = entry.data_offset;
-        const auto entry_end = entry.data_offset + entry.size;
-        const auto chunk_start = offset;
-        const auto chunk_end = offset + size;
-
-        if (chunk_end <= entry_start || chunk_start >= entry_end) continue;
-
-        const auto write_start = std::max<std::uint64_t>(chunk_start, entry_start);
-        const auto write_end = std::min<std::uint64_t>(chunk_end, entry_end);
-        const auto rel = write_start - chunk_start;
-        const auto write_size = static_cast<size_t>(write_end - write_start);
-
-        if (!EnsureEntryStarted(entry)) return false;
-        const auto entry_rel = write_start - entry_start;
-        if (!WriteEntryData(entry, data + rel, write_size, entry_rel)) return false;
-    }
-
-    return true;
-}
-
-bool MtpXciStream::Feed(const void* buf, size_t size, std::uint64_t offset)
-{
-    try {
-        if (!size) return true;
-
-        if (offset < m_next_offset) {
-            const auto skip = static_cast<size_t>(m_next_offset - offset);
-            if (skip >= size) return true;
-            offset += skip;
-            buf = static_cast<const std::uint8_t*>(buf) + skip;
-            size -= skip;
-        }
-
-        std::vector<std::uint8_t> chunk(size);
-        std::memcpy(chunk.data(), buf, size);
-        m_pending_chunks.emplace(offset, std::move(chunk));
-
-        while (true) {
-            auto it = m_pending_chunks.find(m_next_offset);
-            if (it == m_pending_chunks.end()) break;
-            const auto& data = it->second;
-            if (!ProcessChunk(data.data(), data.size(), m_next_offset)) return false;
-            m_next_offset += data.size();
-            m_received = m_next_offset;
-            if (m_total_size) {
-                const auto current = g_stream_received.load(std::memory_order_relaxed);
-                if (m_received > current) {
-                    g_stream_received.store(m_received, std::memory_order_relaxed);
-                }
-            }
-            m_pending_chunks.erase(it);
-        }
-
-        return true;
-    } catch (...) {
-        return false;
-    }
-}
-
-bool MtpXciStream::Finalize()
 {
     if (!m_helper) return true;
 

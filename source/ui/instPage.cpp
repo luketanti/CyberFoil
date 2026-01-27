@@ -46,6 +46,9 @@ namespace inst::ui {
         this->hintText->SetColor(COLOR("#FFFFFFFF"));
         this->hintText->SetX(1280 - 10 - this->hintText->GetTextWidth());
         this->hintText->SetVisible(false);
+        this->progressText = TextBlock::New(0, 340, "", 30);
+        this->progressText->SetColor(COLOR("#FFFFFFFF"));
+        this->progressText->SetVisible(false);
         if (std::filesystem::exists(inst::config::appDir + "/awoo_inst.png")) this->awooImage = Image::New(410, 190, inst::config::appDir + "/awoo_inst.png");
         else this->awooImage = Image::New(510, 166, "romfs:/images/awoos/7d8a05cddfef6da4901b20d2698d5a71.png");
         this->installIconImage = Image::New(kInstallIconX, kInstallIconY, "romfs:/images/awoos/7d8a05cddfef6da4901b20d2698d5a71.png");
@@ -60,6 +63,7 @@ namespace inst::ui {
         this->Add(this->pageInfoText);
         this->Add(this->installInfoText);
         this->Add(this->installBar);
+        this->Add(this->progressText);
         this->Add(this->hintText);
         this->Add(this->awooImage);
         this->Add(this->installIconImage);
@@ -114,6 +118,7 @@ namespace inst::ui {
         mainApp->instpage->installBar->SetProgress(0);
         mainApp->instpage->installBar->SetVisible(false);
         mainApp->instpage->hintText->SetVisible(false);
+        mainApp->instpage->progressText->SetVisible(false);
         mainApp->instpage->installIconImage->SetVisible(false);
         mainApp->instpage->awooImage->SetVisible(!inst::config::gayMode);
         mainApp->LoadLayout(mainApp->instpage);

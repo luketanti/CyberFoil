@@ -191,7 +191,10 @@ namespace inst::ui {
         this->Add(this->appVersionText);
         this->Add(this->butText);
         this->Add(this->pageInfoText);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
         this->Add(this->menu);
+#pragma GCC diagnostic pop
         this->Add(this->infoImage);
         this->Add(this->previewImage);
         for (auto& img : this->gridImages)

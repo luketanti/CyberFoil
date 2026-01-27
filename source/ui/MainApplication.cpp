@@ -1,6 +1,7 @@
 #include "ui/MainApplication.hpp"
 #include "util/lang.hpp"
 #include "util/config.hpp"
+#include <chrono>
 #include "mtp_install.hpp"
 #include "mtp_server.hpp"
 #include "switch.h"
@@ -35,6 +36,9 @@ namespace inst::ui {
             static std::string last_name;
             static bool icon_set = false;
             static bool complete_notified = false;
+            static auto last_time = std::chrono::steady_clock::now();
+            static std::uint64_t last_bytes = 0;
+            static double ema_rate = 0.0;
 
             const bool active = inst::mtp::IsStreamInstallActive();
             const bool server_running = inst::mtp::IsInstallServerRunning();
@@ -48,6 +52,7 @@ namespace inst::ui {
                 this->instpage->installIconImage->SetVisible(false);
                 this->instpage->awooImage->SetVisible(!inst::config::gayMode);
                 this->instpage->hintText->SetVisible(true);
+                this->instpage->progressText->SetVisible(false);
                 icon_set = false;
             }
 
@@ -57,6 +62,9 @@ namespace inst::ui {
                     last_name = "MTP Install";
                 }
                 complete_notified = false;
+                last_time = std::chrono::steady_clock::now();
+                last_bytes = 0;
+                ema_rate = 0.0;
                 this->LoadLayout(this->instpage);
                 this->instpage->pageInfoText->SetText("inst.info_page.top_info0"_lang + last_name + " (MTP)");
                 this->instpage->installInfoText->SetText("inst.info_page.preparing"_lang);
@@ -65,6 +73,7 @@ namespace inst::ui {
                 this->instpage->installIconImage->SetVisible(false);
                 this->instpage->awooImage->SetVisible(!inst::config::gayMode);
                 this->instpage->hintText->SetVisible(true);
+                this->instpage->progressText->SetVisible(true);
                 icon_set = false;
             }
 
@@ -77,6 +86,67 @@ namespace inst::ui {
                     this->instpage->installBar->SetVisible(true);
                     this->instpage->installBar->SetProgress(percent);
                     this->instpage->installInfoText->SetText("inst.info_page.downloading"_lang + last_name);
+
+                    const auto now = std::chrono::steady_clock::now();
+                    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_time).count();
+                    if (elapsed >= 1000) {
+                        const auto delta = received - last_bytes;
+                        const double rate = (elapsed > 0) ? (double)delta / ((double)elapsed / 1000.0) : 0.0;
+                        if (rate > 0.0) {
+                            if (ema_rate <= 0.0) {
+                                ema_rate = rate;
+                            } else {
+                                ema_rate = (ema_rate * 0.7) + (rate * 0.3);
+                            }
+                        }
+                        last_bytes = received;
+                        last_time = now;
+                    }
+
+                    std::string eta_text = "Calculating...";
+                    if (ema_rate > 0.0 && received < total) {
+                        const auto remaining = total - received;
+                        const auto seconds = static_cast<std::uint64_t>(remaining / ema_rate);
+                        const auto h = seconds / 3600;
+                        const auto m = (seconds % 3600) / 60;
+                        const auto s = seconds % 60;
+                        if (h > 0) {
+                            eta_text = std::to_string(h) + ":" + (m < 10 ? "0" : "") + std::to_string(m) + ":" + (s < 10 ? "0" : "") + std::to_string(s);
+                        } else {
+                            eta_text = std::to_string(m) + ":" + (s < 10 ? "0" : "") + std::to_string(s);
+                        }
+                        eta_text = eta_text + " remaining";
+                    }
+
+                    std::string speed_text;
+                    if (ema_rate > 0.0) {
+                        const double mbps = ema_rate / (1024.0 * 1024.0);
+                        const double rounded = std::round(mbps * 10.0) / 10.0;
+                        speed_text = std::to_string(rounded);
+                        if (speed_text.find('.') != std::string::npos) {
+                            while (!speed_text.empty() && speed_text.back() == '0') speed_text.pop_back();
+                            if (!speed_text.empty() && speed_text.back() == '.') speed_text.pop_back();
+                        }
+                        speed_text += " MB/s";
+                    } else {
+                        speed_text = "-- MB/s";
+                    }
+
+                    std::string format_text;
+                    const auto dot = last_name.find_last_of('.');
+                    if (dot != std::string::npos) {
+                        format_text = last_name.substr(dot + 1);
+                        std::transform(format_text.begin(), format_text.end(), format_text.begin(), ::toupper);
+                    }
+
+                    const int pct = static_cast<int>(percent + 0.5);
+                    std::string progress_text = std::to_string(pct) + "% • " + eta_text + " • " + speed_text;
+                    if (!format_text.empty()) {
+                        progress_text += " • " + format_text;
+                    }
+                    this->instpage->progressText->SetText(progress_text);
+                    this->instpage->progressText->SetX((1280 - this->instpage->progressText->GetTextWidth()) / 2);
+                    this->instpage->progressText->SetVisible(true);
                 }
 
                 if (!icon_set) {
@@ -103,6 +173,9 @@ namespace inst::ui {
                 this->instpage->installBar->SetProgress(100);
                 this->instpage->installInfoText->SetText("inst.info_page.complete"_lang + std::string("\n\n") + "inst.mtp.waiting.hint"_lang);
                 this->instpage->hintText->SetVisible(true);
+                this->instpage->progressText->SetText("100% • done");
+                this->instpage->progressText->SetX((1280 - this->instpage->progressText->GetTextWidth()) / 2);
+                this->instpage->progressText->SetVisible(true);
                 if (!complete_notified) {
                     this->CreateShowDialog(last_name + "inst.info_page.desc1"_lang, Language::GetRandomMsg(), {"common.ok"_lang}, true);
                     complete_notified = true;

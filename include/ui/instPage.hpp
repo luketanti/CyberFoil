@@ -17,6 +17,7 @@ namespace inst::ui {
             Image::Ref titleImage;
             TextBlock::Ref appVersionText;
             TextBlock::Ref hintText;
+            TextBlock::Ref progressText;
             static void setTopInstInfoText(std::string ourText);
             static void setInstInfoText(std::string ourText);
             static void setInstBarPerc(double ourPercent);
