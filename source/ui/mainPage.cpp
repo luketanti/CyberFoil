@@ -7,6 +7,7 @@
 #include "util/lang.hpp"
 #include "sigInstall.hpp"
 #include "data/buffered_placeholder_writer.hpp"
+#include "mtp_server.hpp"
 
 #define COLOR(hex) pu::ui::Color::FromHex(hex)
 
@@ -77,6 +78,9 @@ namespace inst::ui {
         this->usbInstallMenuItem = pu::ui::elm::MenuItem::New("main.menu.usb"_lang);
         this->usbInstallMenuItem->SetColor(COLOR("#FFFFFFFF"));
         this->usbInstallMenuItem->SetIcon("romfs:/images/icons/usb-port.png");
+        this->mtpInstallMenuItem = pu::ui::elm::MenuItem::New("main.menu.mtp"_lang);
+        this->mtpInstallMenuItem->SetColor(COLOR("#FFFFFFFF"));
+        this->mtpInstallMenuItem->SetIcon("romfs:/images/icons/usb-port.png");
         this->sigPatchesMenuItem = pu::ui::elm::MenuItem::New("main.menu.sig"_lang);
         this->sigPatchesMenuItem->SetColor(COLOR("#FFFFFFFF"));
         this->sigPatchesMenuItem->SetIcon("romfs:/images/icons/wrench.png");
@@ -97,6 +101,7 @@ namespace inst::ui {
         this->optionMenu->AddItem(this->installMenuItem);
         this->optionMenu->AddItem(this->netInstallMenuItem);
         this->optionMenu->AddItem(this->usbInstallMenuItem);
+        this->optionMenu->AddItem(this->mtpInstallMenuItem);
         this->optionMenu->AddItem(this->sigPatchesMenuItem);
         this->optionMenu->AddItem(this->settingsMenuItem);
         this->optionMenu->AddItem(this->exitMenuItem);
@@ -139,6 +144,20 @@ namespace inst::ui {
         else mainApp->CreateShowDialog("main.usb.error.title"_lang, "main.usb.error.desc"_lang, {"common.ok"_lang}, false);
     }
 
+    void MainPage::mtpInstallMenuItem_Click() {
+        int dialogResult = mainApp->CreateShowDialog("inst.mtp.target.title"_lang, "inst.mtp.target.desc"_lang, {"inst.target.opt0"_lang, "inst.target.opt1"_lang}, false);
+        if (dialogResult == -1) return;
+
+        if (!inst::mtp::StartInstallServer(dialogResult)) {
+            mainApp->CreateShowDialog("inst.mtp.error.title"_lang, "inst.mtp.error.desc"_lang, {"common.ok"_lang}, true);
+            return;
+        }
+
+        inst::ui::instPage::loadInstallScreen();
+        inst::ui::instPage::setTopInstInfoText("inst.mtp.waiting.title"_lang);
+        inst::ui::instPage::setInstInfoText("inst.mtp.waiting.desc"_lang);
+    }
+
     void MainPage::sigPatchesMenuItem_Click() {
         sig::installSigPatches();
     }
@@ -172,12 +191,15 @@ namespace inst::ui {
                     MainPage::usbInstallMenuItem_Click();
                     break;
                 case 4:
-                    MainPage::sigPatchesMenuItem_Click();
+                    MainPage::mtpInstallMenuItem_Click();
                     break;
                 case 5:
-                    MainPage::settingsMenuItem_Click();
+                    MainPage::sigPatchesMenuItem_Click();
                     break;
                 case 6:
+                    MainPage::settingsMenuItem_Click();
+                    break;
+                case 7:
                     MainPage::exitMenuItem_Click();
                     break;
                 default:

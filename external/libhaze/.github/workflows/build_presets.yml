@@ -1,0 +1,33 @@
+name: build
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        preset: [MinSizeRel]
+    runs-on: ${{ matrix.os }}
+    container: devkitpro/devkita64:latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    # fetch latest cmake
+    - uses: lukka/get-cmake@latest
+
+    - name: Configure CMake
+      run: |
+        cmake --preset ${{ matrix.preset }}
+
+    - name: Build
+      run: cmake --build --preset ${{ matrix.preset }} --parallel 4
+
+    - name: Deploy
+      if: ${{ github.event_name != 'pull_request' && github.event.action != 'unassigned' }}
+      uses: actions/upload-artifact@master
+      with:
+        name: libhaze-example-${{ matrix.preset }}
+        path: build/${{ matrix.preset }}/libhaze-example.nro

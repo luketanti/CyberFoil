@@ -1,0 +1,9 @@
+*.elf
+*.nacp
+*.nro
+*.bz2
+*.vscode
+build/
+old/
+release/
+lib/

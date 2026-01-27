@@ -12,6 +12,7 @@ namespace inst::ui {
             void netInstallMenuItem_Click();
             void shopInstallMenuItem_Click();
             void usbInstallMenuItem_Click();
+            void mtpInstallMenuItem_Click();
             void sigPatchesMenuItem_Click();
             void settingsMenuItem_Click();
             void exitMenuItem_Click();
@@ -30,6 +31,7 @@ namespace inst::ui {
             pu::ui::elm::MenuItem::Ref netInstallMenuItem;
             pu::ui::elm::MenuItem::Ref shopInstallMenuItem;
             pu::ui::elm::MenuItem::Ref usbInstallMenuItem;
+            pu::ui::elm::MenuItem::Ref mtpInstallMenuItem;
             pu::ui::elm::MenuItem::Ref sigPatchesMenuItem;
             pu::ui::elm::MenuItem::Ref settingsMenuItem;
             pu::ui::elm::MenuItem::Ref exitMenuItem;

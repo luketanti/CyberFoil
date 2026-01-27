@@ -2,6 +2,7 @@
 #include "ui/MainApplication.hpp"
 #include "ui/instPage.hpp"
 #include "util/config.hpp"
+#include "mtp_server.hpp"
 
 #define COLOR(hex) pu::ui::Color::FromHex(hex)
 
@@ -22,8 +23,10 @@ namespace inst::ui {
         }
         const auto topColor = inst::config::oledMode ? COLOR("#000000FF") : COLOR("#170909FF");
         const auto infoColor = inst::config::oledMode ? COLOR("#000000FF") : COLOR("#17090980");
+        const auto botColor = inst::config::oledMode ? COLOR("#000000FF") : COLOR("#17090980");
         this->topRect = Rectangle::New(0, 0, 1280, 94, topColor);
         this->infoRect = Rectangle::New(0, 95, 1280, 60, infoColor);
+        this->botRect = Rectangle::New(0, 659, 1280, 61, botColor);
         if (inst::config::gayMode) {
             this->titleImage = Image::New(-113, 0, "romfs:/images/logo.png");
             this->appVersionText = TextBlock::New(367, 49, "v" + inst::config::appVersion, 22);
@@ -39,6 +42,10 @@ namespace inst::ui {
         this->installInfoText->SetColor(COLOR("#FFFFFFFF"));
         this->installBar = pu::ui::elm::ProgressBar::New(10, 600, 850, 40, 100.0f);
         this->installBar->SetColor(COLOR("#222222FF"));
+        this->hintText = TextBlock::New(0, 678, " Back", 24);
+        this->hintText->SetColor(COLOR("#FFFFFFFF"));
+        this->hintText->SetX(1280 - 10 - this->hintText->GetTextWidth());
+        this->hintText->SetVisible(false);
         if (std::filesystem::exists(inst::config::appDir + "/awoo_inst.png")) this->awooImage = Image::New(410, 190, inst::config::appDir + "/awoo_inst.png");
         else this->awooImage = Image::New(510, 166, "romfs:/images/awoos/7d8a05cddfef6da4901b20d2698d5a71.png");
         this->installIconImage = Image::New(kInstallIconX, kInstallIconY, "romfs:/images/awoos/7d8a05cddfef6da4901b20d2698d5a71.png");
@@ -47,11 +54,13 @@ namespace inst::ui {
         this->installIconImage->SetVisible(false);
         this->Add(this->topRect);
         this->Add(this->infoRect);
+        this->Add(this->botRect);
         this->Add(this->titleImage);
         this->Add(this->appVersionText);
         this->Add(this->pageInfoText);
         this->Add(this->installInfoText);
         this->Add(this->installBar);
+        this->Add(this->hintText);
         this->Add(this->awooImage);
         this->Add(this->installIconImage);
         if (inst::config::gayMode) this->awooImage->SetVisible(false);
@@ -104,6 +113,7 @@ namespace inst::ui {
         mainApp->instpage->installInfoText->SetText("");
         mainApp->instpage->installBar->SetProgress(0);
         mainApp->instpage->installBar->SetVisible(false);
+        mainApp->instpage->hintText->SetVisible(false);
         mainApp->instpage->installIconImage->SetVisible(false);
         mainApp->instpage->awooImage->SetVisible(!inst::config::gayMode);
         mainApp->LoadLayout(mainApp->instpage);
@@ -111,5 +121,9 @@ namespace inst::ui {
     }
 
     void instPage::onInput(u64 Down, u64 Up, u64 Held, pu::ui::Touch Pos) {
+        if ((Down & HidNpadButton_B) && inst::mtp::IsInstallServerRunning()) {
+            inst::mtp::StopInstallServer();
+            loadMainMenu();
+        }
     }
 }

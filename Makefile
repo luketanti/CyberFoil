@@ -39,9 +39,9 @@ include $(DEVKITPRO)/libnx/switch_rules
 #---------------------------------------------------------------------------------
 TARGET		:=	cyberfoil
 BUILD		:=	build
-SOURCES		:=	source source/ui source/data source/install source/nx source/nx/ipc source/util
+SOURCES		:=	source source/ui source/data source/install source/nx source/nx/ipc source/util external/libhaze/source
 DATA		:=	data
-INCLUDES	:=	include include/ui include/data include/install include/nx include/nx/ipc include/util include/Plutonium/Plutonium/Output-switch/include
+INCLUDES	:=	include include/ui include/data include/install include/nx include/nx/ipc include/util include/Plutonium/Plutonium/Output-switch/include external/libhaze/include
 APP_TITLE	:=	CyberFoil
 APP_AUTHOR	:=	luketanti
 APP_VERSION	:=	1.3.8
@@ -62,7 +62,7 @@ CFLAGS	+=	`$(PREFIX)pkg-config --cflags libturbojpeg freetype2`
 
 CFLAGS	+=	$(INCLUDE) -D__SWITCH__ -Wall #-Werror -D__DEBUG__ -DNXLINK_DEBUG
 
-CXXFLAGS	:= $(CFLAGS) -fno-rtti -std=gnu++17
+CXXFLAGS	:= $(CFLAGS) -fno-rtti -std=gnu++20
 
 
 ASFLAGS	:=	-g $(ARCH)

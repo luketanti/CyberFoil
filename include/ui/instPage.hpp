@@ -16,6 +16,7 @@ namespace inst::ui {
             Image::Ref installIconImage;
             Image::Ref titleImage;
             TextBlock::Ref appVersionText;
+            TextBlock::Ref hintText;
             static void setTopInstInfoText(std::string ourText);
             static void setInstInfoText(std::string ourText);
             static void setInstBarPerc(double ourPercent);
@@ -26,5 +27,6 @@ namespace inst::ui {
         private:
             Rectangle::Ref infoRect;
             Rectangle::Ref topRect;
+            Rectangle::Ref botRect;
     };
 }

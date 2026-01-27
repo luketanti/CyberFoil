@@ -1,0 +1,66 @@
+{
+    "version": 3,
+    "cmakeMinimumRequired": {
+        "major": 3,
+        "minor": 21,
+        "patch": 0
+    },
+    "configurePresets": [
+        {
+            "name": "core",
+            "displayName": "core",
+            "hidden": true,
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_EXPORT_COMPILE_COMMANDS": true,
+                "BUILD_EXAMPLES": true
+            }
+        },
+        {
+            "name": "Release",
+            "displayName": "Release",
+            "inherits":["core"],
+            "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+        },
+        {
+            "name": "RelWithDebInfo",
+            "displayName": "RelWithDebInfo",
+            "inherits":["core"],
+            "cacheVariables": { "CMAKE_BUILD_TYPE":"RelWithDebInfo" }
+        },
+        {
+            "name": "MinSizeRel",
+            "displayName": "MinSizeRel",
+            "inherits":["core"],
+            "cacheVariables": { "CMAKE_BUILD_TYPE":"MinSizeRel" }
+        },
+        {
+            "name": "Debug",
+            "displayName": "Debug",
+            "inherits":["core"],
+            "cacheVariables": { "CMAKE_BUILD_TYPE":"Debug" }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "Release",
+            "configurePreset": "Release",
+            "jobs": 16
+        },
+        {
+            "name": "RelWithDebInfo",
+            "configurePreset": "RelWithDebInfo",
+            "jobs": 16
+        },
+        {
+            "name": "MinSizeRel",
+            "configurePreset": "MinSizeRel",
+            "jobs": 16
+        },
+        {
+            "name": "Debug",
+            "configurePreset": "Debug",
+            "jobs": 16
+        }
+    ]
+}

@@ -5,6 +5,7 @@
             "net": "Install over LAN or internet",
             "shop": "Install from Ownfoil eShop",
             "usb": "Install over USB",
+            "mtp": "Install over MTP",
             "sig": "Manage signature patches",
             "set": "Settings",
             "exit": "Exit"
@@ -109,6 +110,21 @@
             "desc01": " files be installed to?",
             "opt0": "SD Card",
             "opt1": "Internal Storage"
+        },
+        "mtp": {
+            "target": {
+                "title": "MTP Install",
+                "desc": "Where should MTP installs go?"
+            },
+            "waiting": {
+                "title": "MTP Install",
+                "desc": "Connect your PC and upload files to the MTP Install folder.",
+                "hint": "Press B to stop MTP."
+            },
+            "error": {
+                "title": "MTP Error",
+                "desc": "Failed to start the MTP server."
+            }
         },
         "info_page": {
             "top_info0": "Installing ",
