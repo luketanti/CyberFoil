@@ -30,6 +30,7 @@
 #include "util/error.hpp"
 #include "util/hauth.hpp"
 #include "util/install_diagnostics.hpp"
+#include "util/install_queue.hpp"
 #include "util/json.hpp"
 #include "util/lang.hpp"
 #include "util/network_util.hpp"
@@ -2365,8 +2366,21 @@ namespace shopInstStuff {
         }
 
         LOG_DEBUG("Done");
+        inst::queue::InstallQueue::Instance().MarkBatchComplete(nspInstalled);
+
+        // Check if there are more items in the queue
+        std::vector<ShopItem> nextBatch;
+        int nextStorageId = 0;
+        std::string nextSourceLabel;
+        if (inst::queue::InstallQueue::Instance().PopNextBatch(nextBatch, nextStorageId, nextSourceLabel)) {
+            // Continue with next batch without returning to shop
+            inst::ui::instPage::loadMainMenu();
+            inst::util::deinitInstallServices();
+            installTitleShop(nextBatch, nextStorageId, nextSourceLabel);
+            return;
+        }
+
         inst::ui::instPage::loadMainMenu();
         inst::util::deinitInstallServices();
     }
 }
-

@@ -120,6 +120,7 @@ namespace tin::install::nsp
                         return 0;
                     if (args->bufferedPlaceholderWriter->CanAppendData(streamBufSize))
                         break;
+                    svcSleepThread(100000ULL); // 0.1ms yield to avoid busy-spin
                 }
 
                 args->bufferedPlaceholderWriter->AppendData(streamBuf, streamBufSize);
@@ -154,6 +155,8 @@ namespace tin::install::nsp
                 }
                 if (args->bufferedPlaceholderWriter->CanWriteSegmentToPlaceholder())
                     args->bufferedPlaceholderWriter->WriteSegmentToPlaceholder();
+                else
+                    svcSleepThread(100000ULL); // 0.1ms yield to avoid busy-spin
             }
         }
         catch (...) {

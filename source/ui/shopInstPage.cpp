@@ -15,6 +15,7 @@
 #include "ui/overflowText.hpp"
 #include "util/config.hpp"
 #include "util/curl.hpp"
+#include "util/install_queue.hpp"
 #include "util/lang.hpp"
 #include "util/offline_title_db.hpp"
 #include "util/save_sync.hpp"
@@ -942,6 +943,9 @@ namespace inst::ui {
         this->searchInfoText->SetVisible(false);
         this->butText = TextBlock::New(10, 678, "", 20);
         this->butText->SetColor(COLOR("#FFFFFFFF"));
+        this->queueStatusText = TextBlock::New(0, 678, "", 18);
+        this->queueStatusText->SetColor(COLOR("#4CD964FF"));
+        this->queueStatusText->SetVisible(false);
         this->setButtonsText("inst.shop.buttons_loading"_lang);
         this->menu = pu::ui::elm::Menu::New(0, 136, 1280, COLOR("#FFFFFF00"), 36, 14, 22);
         if (inst::config::oledMode) {
@@ -1063,6 +1067,7 @@ namespace inst::ui {
         this->Add(this->timeText);
         this->Add(this->ipText);
         this->Add(this->butText);
+        this->Add(this->queueStatusText);
         this->Add(this->pageInfoText);
         this->Add(this->loadingProgressText);
         this->Add(this->loadingBarBack);
@@ -3990,6 +3995,9 @@ namespace inst::ui {
     }
 
     void shopInstPage::refreshAfterInstall() {
+        // Clear finished queue items
+        inst::queue::InstallQueue::Instance().ClearFinished();
+
         if (this->shopSections.empty() || this->activeShopUrl.empty()) {
             this->startShop(true);
             return;
@@ -4171,9 +4179,9 @@ namespace inst::ui {
         int dialogResult = -1;
         if (this->selectedItems.size() == 1) {
             std::string name = inst::util::shortenString(this->selectedItems[0].name, 32, true);
-            dialogResult = mainApp->CreateShowDialog("inst.target.desc0"_lang + name + "inst.target.desc1"_lang, "common.cancel_desc"_lang, {"inst.target.opt0"_lang, "inst.target.opt1"_lang}, false);
+            dialogResult = mainApp->CreateShowDialog("inst.target.desc0"_lang + name + "inst.target.desc1"_lang, "common.cancel_desc"_lang, {"inst.target.opt0"_lang, "inst.target.opt1"_lang, "Queue (SD)", "Queue (NAND)"}, false);
         } else {
-            dialogResult = mainApp->CreateShowDialog("inst.target.desc00"_lang + std::to_string(this->selectedItems.size()) + "inst.target.desc01"_lang, "common.cancel_desc"_lang, {"inst.target.opt0"_lang, "inst.target.opt1"_lang}, false);
+            dialogResult = mainApp->CreateShowDialog("inst.target.desc00"_lang + std::to_string(this->selectedItems.size()) + "inst.target.desc01"_lang, "common.cancel_desc"_lang, {"inst.target.opt0"_lang, "inst.target.opt1"_lang, "Queue (SD)", "Queue (NAND)"}, false);
         }
         if (dialogResult == -1) {
             if (!autoAddedItems.empty()) {
@@ -4204,11 +4212,59 @@ namespace inst::ui {
         }
 
         this->updateRememberedSelection();
-        shopInstStuff::installTitleShop(this->selectedItems, dialogResult, "inst.shop.source_string"_lang);
-        this->refreshAfterInstall();
+        auto& queue = inst::queue::InstallQueue::Instance();
+
+        if (dialogResult == 2 || dialogResult == 3) {
+            // "Queue (SD)" = 2, "Queue (NAND)" = 3 - add to queue, stay in shop
+            int queueStorage = (dialogResult == 3) ? 1 : 0;
+            queue.Enqueue(this->selectedItems, queueStorage, "inst.shop.source_string"_lang);
+            this->selectedItems.clear();
+            if (this->shopGridMode)
+                this->updateShopGrid();
+            else
+                this->drawMenuItems(false);
+            return;
+        }
+
+        // dialogResult 0 = SD, 1 = NAND - start install immediately
+        queue.Enqueue(this->selectedItems, dialogResult, "inst.shop.source_string"_lang);
+        this->selectedItems.clear();
+
+        // Pop and start the batch
+        std::vector<shopInstStuff::ShopItem> batch;
+        int batchStorage = 0;
+        std::string batchSource;
+        if (queue.PopNextBatch(batch, batchStorage, batchSource)) {
+            shopInstStuff::installTitleShop(batch, batchStorage, batchSource);
+            this->refreshAfterInstall();
+            return;
+        }
+
+        // Fallback: refresh shop view
+        if (this->shopGridMode)
+            this->updateShopGrid();
+        else
+            this->drawMenuItems(false);
     }
 
     void shopInstPage::onInput(u64 Down, u64 Up, u64 Held, pu::ui::Touch Pos) {
+        // Update queue status indicator
+        {
+            auto& queue = inst::queue::InstallQueue::Instance();
+            if (queue.ConsumeUiDirtyFlag() || queue.HasPending()) {
+                std::string status = queue.GetStatusText();
+                if (!status.empty()) {
+                    if (queue.HasPending() && !queue.IsRunning())
+                        status += "  [+] Start";
+                    this->queueStatusText->SetText(status);
+                    this->queueStatusText->SetX(1280 - 10 - this->queueStatusText->GetTextWidth());
+                    this->queueStatusText->SetVisible(true);
+                } else {
+                    this->queueStatusText->SetVisible(false);
+                }
+            }
+        }
+
         int bottomTapX = 0;
         if (DetectBottomHintTap(Pos, this->bottomHintTouch, 668, 52, bottomTapX)) {
             Down |= FindBottomHintButton(this->bottomHintSegments, bottomTapX);
@@ -4312,7 +4368,20 @@ namespace inst::ui {
         if (this->shopGridMode) {
             if (Down & HidNpadButton_Plus) {
                 if (!this->isInstalledSection() && !this->isSaveSyncSection() && !this->visibleItems.empty() && this->selectedItems.empty()) {
-                    this->selectTitle(this->shopGridIndex);
+                    // If no items selected but queue has pending items, start the queue
+                    auto& queue = inst::queue::InstallQueue::Instance();
+                    if (queue.HasPending()) {
+                        std::vector<shopInstStuff::ShopItem> batch;
+                        int batchStorage = 0;
+                        std::string batchSource;
+                        if (queue.PopNextBatch(batch, batchStorage, batchSource)) {
+                            shopInstStuff::installTitleShop(batch, batchStorage, batchSource);
+                            this->refreshAfterInstall();
+                            return;
+                        }
+                    } else {
+                        this->selectTitle(this->shopGridIndex);
+                    }
                 }
                 if (!this->isInstalledSection() && !this->isSaveSyncSection() && !this->selectedItems.empty())
                     this->startInstall();
@@ -4605,7 +4674,20 @@ namespace inst::ui {
         if (Down & HidNpadButton_Plus) {
             if (!this->isInstalledSection() && !this->isSaveSyncSection()) {
                 if (this->selectedItems.empty()) {
-                    this->selectTitle(this->menu->GetSelectedIndex());
+                    // If no items selected but queue has pending items, start the queue
+                    auto& queue = inst::queue::InstallQueue::Instance();
+                    if (queue.HasPending()) {
+                        std::vector<shopInstStuff::ShopItem> batch;
+                        int batchStorage = 0;
+                        std::string batchSource;
+                        if (queue.PopNextBatch(batch, batchStorage, batchSource)) {
+                            shopInstStuff::installTitleShop(batch, batchStorage, batchSource);
+                            this->refreshAfterInstall();
+                            return;
+                        }
+                    } else {
+                        this->selectTitle(this->menu->GetSelectedIndex());
+                    }
                 }
                 if (!this->selectedItems.empty()) this->startInstall();
             }

@@ -223,6 +223,12 @@ namespace tin::network
         curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 8L);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &callbackCtx);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &ParseHTMLDataCallback);
+        curl_easy_setopt(curl, CURLOPT_BUFFERSIZE, 512L * 1024L);
+        curl_easy_setopt(curl, CURLOPT_TCP_NODELAY, 1L);
+        curl_easy_setopt(curl, CURLOPT_TCP_KEEPALIVE, 1L);
+        curl_easy_setopt(curl, CURLOPT_TCP_KEEPIDLE, 30L);
+        curl_easy_setopt(curl, CURLOPT_TCP_KEEPINTVL, 15L);
+        curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
         std::string authValue;
         ApplyBasicAuth(curl, authValue);
 
@@ -322,6 +328,8 @@ namespace tin::network
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, false);
         const std::string& userAgent = inst::curl::getUserAgent();
         curl_easy_setopt(curl, CURLOPT_USERAGENT, userAgent.c_str());
+        curl_easy_setopt(curl, CURLOPT_TCP_NODELAY, 1L);
+        curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
         curl_easy_setopt(curl, CURLOPT_HEADERDATA, this);
         curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &tin::network::HTTPHeader::ParseHTMLHeader);
         std::string authValue;

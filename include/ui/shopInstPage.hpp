@@ -46,6 +46,7 @@ namespace inst::ui {
             Rectangle::Ref batteryOutline;
             Rectangle::Ref batteryFill;
             Rectangle::Ref batteryCap;
+            TextBlock::Ref queueStatusText;
         private:
             enum class BrowseSortMode {
                 Default,
