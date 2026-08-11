@@ -188,9 +188,9 @@ static size_t writeDataFileAtOffset(void *ptr, size_t size, size_t nmemb, void *
     return fwrite(ptr, size, nmemb, ctx->file);
 }
 
-static constexpr long kDefaultConnectTimeoutMs = 15000;
+static constexpr long kDefaultConnectTimeoutMs = 30000;
 static constexpr long kLowSpeedLimitBytesPerSec = 1;
-static constexpr long kLowSpeedTimeSeconds = 45;
+static constexpr long kLowSpeedTimeSeconds = 15;
 static constexpr long kFileDownloadCurlBufferSize = 512L * 1024L;
 static constexpr std::size_t kFileDownloadIoBufferSize = 1024U * 1024U;
 
@@ -211,7 +211,7 @@ static void removeFileIfExistsNoThrow(const char* path) {
     std::filesystem::remove(path, ec);
 }
 
-static void applyCommonCurlOptions(CURL *curl_handle, const std::string& url, long timeout, bool writeProgress) {
+static void applyCommonCurlOptions(CURL *curl_handle, const std::string& url, long timeout, bool writeProgress, bool forceNewConnection = false) {
     curl_easy_setopt(curl_handle, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl_handle, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYPEER, 0L);
@@ -221,6 +221,12 @@ static void applyCommonCurlOptions(CURL *curl_handle, const std::string& url, lo
     curl_easy_setopt(curl_handle, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(curl_handle, CURLOPT_BUFFERSIZE, kFileDownloadCurlBufferSize);
     curl_easy_setopt(curl_handle, CURLOPT_TCP_KEEPALIVE, 1L);
+    // Do NOT set TCP_KEEPIDLE / TCP_KEEPINTVL (speed regression)
+
+    if (forceNewConnection) {
+        curl_easy_setopt(curl_handle, CURLOPT_FRESH_CONNECT, 1L);
+        curl_easy_setopt(curl_handle, CURLOPT_FORBID_REUSE, 1L);
+    }
 
     if (writeProgress) {
         curl_easy_setopt(curl_handle, CURLOPT_NOPROGRESS, 0L);

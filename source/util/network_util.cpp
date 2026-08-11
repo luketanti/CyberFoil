@@ -215,6 +215,8 @@ namespace tin::network
 
         curl_easy_setopt(curl, CURLOPT_URL, requestUrl.c_str());
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, false);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+        curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
         const std::string& userAgent = inst::curl::getUserAgent();
         curl_easy_setopt(curl, CURLOPT_USERAGENT, userAgent.c_str());
         curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "identity");
@@ -223,6 +225,21 @@ namespace tin::network
         curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 8L);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &callbackCtx);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &ParseHTMLDataCallback);
+
+        // Larger receive buffer (throughput)
+        curl_easy_setopt(curl, CURLOPT_BUFFERSIZE, 512L * 1024L);
+
+        // Stall at ~0 B/s → abort this attempt (~15s), then StreamDataRange retries
+        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L);
+        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 15L);
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 30000L);
+
+        // New TCP each range attempt (don't reuse a half-dead connection)
+        curl_easy_setopt(curl, CURLOPT_FRESH_CONNECT, 1L);
+        curl_easy_setopt(curl, CURLOPT_FORBID_REUSE, 1L);
+        curl_easy_setopt(curl, CURLOPT_TCP_KEEPALIVE, 1L);
+        // Do NOT set TCP_KEEPIDLE / TCP_KEEPINTVL
+
         std::string authValue;
         ApplyBasicAuth(curl, authValue);
 
@@ -263,12 +280,13 @@ namespace tin::network
         if (rc == CURLE_OK && httpCode == 206)
             return 0;
 
-        LOG_DEBUG("Range request failed url=%s range=%s http=%lu curl=%d\n",
-            requestUrl.c_str(), range.c_str(), httpCode, (int)rc);
+        LOG_DEBUG("Range request failed url=%s range=%s http=%lu curl=%d (%s)\n",
+            requestUrl.c_str(), range.c_str(), httpCode, (int)rc, curl_easy_strerror(rc));
 
         if (httpCode != 0 && httpCode != 206)
             return static_cast<int>(httpCode);
 
+        // e.g. CURLE_OPERATION_TIMEDOUT from LOW_SPEED → retriable in StreamDataRange
         return 1000 + static_cast<int>(rc);
     }
 
@@ -471,8 +489,8 @@ namespace tin::network
         if (!m_rangesSupported)
             THROW_FORMAT("Attempted range request when ranges aren't supported!\n");
 
-        static constexpr int kMaxRetries = 3;
-        static constexpr u64 kRetryDelayNs = 2000000000ULL;
+        static constexpr int kMaxRetries = 15;
+        static constexpr u64 kRetryDelayNs = 2500000000ULL;
 
         auto streamWithRetry = [&](const std::string& url, size_t requestOffset, size_t requestSize) -> int
         {

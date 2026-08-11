@@ -40,6 +40,10 @@ namespace inst::ui { extern MainApplication *mainApp; }
 namespace tin::install::nsp
 {
     namespace {
+        // How many full StreamDataRange cycles to auto-approve before showing UI.
+        // Raise for more "sleep/wake"-style recovery without user input.
+        constexpr int kAutoRetryCycles = 5;
+
         std::string DeriveDisplayNameFromUrl(const std::string& url)
         {
             const std::size_t fragmentPos = url.find('#');
@@ -104,6 +108,7 @@ namespace tin::install::nsp
         u64 pfs0Offset;
         u64 ncaSize;
         RetryConfirmState retryConfirm;
+        std::atomic<int> autoRetryCyclesLeft{kAutoRetryCycles};
     };
 
     int CurlStreamFunc(void* in)
@@ -126,10 +131,29 @@ namespace tin::install::nsp
                 return streamBufSize;
             };
 
+            // Auto-approve several full retry cycles (Range resume) without UI.
+            // After those are used, fall back to the existing Yes/No dialog once.
             auto retryConfirmFunc = [&]() -> bool {
+                if (stopThreadsHttpNsp || inst::ui::instPage::isInstallCancelRequested())
+                    return false;
+
+                int left = args->autoRetryCyclesLeft.load();
+                while (left > 0) {
+                    if (args->autoRetryCyclesLeft.compare_exchange_weak(left, left - 1)) {
+                        LOG_DEBUG("HTTPNSP: auto-approve retry cycle, remaining=%d\n", left - 1);
+                        svcSleepThread(1000000000ULL); // 1s pause before next cycle
+                        return !stopThreadsHttpNsp &&
+                               !inst::ui::instPage::isInstallCancelRequested();
+                    }
+                    left = args->autoRetryCyclesLeft.load();
+                }
+
+                // Silent cycles exhausted — ask the user
+                args->retryConfirm.approved.store(false);
                 args->retryConfirm.pending.store(true);
                 while (args->retryConfirm.pending.load() && !stopThreadsHttpNsp)
                     svcSleepThread(50 * 1000 * 1000ULL);
+
                 return !stopThreadsHttpNsp && args->retryConfirm.approved.load();
             };
 
@@ -178,6 +202,7 @@ namespace tin::install::nsp
         args.bufferedPlaceholderWriter = &bufferedPlaceholderWriter;
         args.pfs0Offset = this->GetDataOffset() + fileEntry->dataOffset;
         args.ncaSize = ncaSize;
+        args.autoRetryCyclesLeft.store(kAutoRetryCycles);
         thrd_t curlThread;
         thrd_t writeThread;
 
