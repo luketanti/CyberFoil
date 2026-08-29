@@ -619,23 +619,26 @@ namespace {
         return outBaseId != 0;
     }
 
-    bool IsBaseItem(const remoteInstStuff::RemoteItem& item)
-    {
-        std::int32_t normalizedType = -1;
-        return TryInferNormalizedAppType(item, normalizedType) && normalizedType == NcmContentMetaType_Application;
-    }
+    // An item can answer yes to more than one of these (a base-suffixed title id whose name says
+    // "DLC" is both), so this is a flag set, not an enum. Bit 0 only marks "already computed".
+    constexpr std::uint8_t kTypeComputed = 1 << 0;
+    constexpr std::uint8_t kTypeBase = 1 << 1;
+    constexpr std::uint8_t kTypeUpdate = 1 << 2;
+    constexpr std::uint8_t kTypeDlc = 1 << 3;
 
-    bool IsUpdateItem(const remoteInstStuff::RemoteItem& item)
+    std::uint8_t ClassifyItem(const remoteInstStuff::RemoteItem& item)
     {
-        std::int32_t normalizedType = -1;
-        return TryInferNormalizedAppType(item, normalizedType) && normalizedType == NcmContentMetaType_Patch;
-    }
+        std::uint8_t flags = kTypeComputed;
 
-    bool IsDlcItem(const remoteInstStuff::RemoteItem& item)
-    {
         std::int32_t normalizedType = -1;
-        if (TryInferNormalizedAppType(item, normalizedType) && normalizedType == NcmContentMetaType_AddOnContent)
-            return true;
+        if (TryInferNormalizedAppType(item, normalizedType)) {
+            if (normalizedType == NcmContentMetaType_Application)
+                flags |= kTypeBase;
+            else if (normalizedType == NcmContentMetaType_Patch)
+                flags |= kTypeUpdate;
+            else if (normalizedType == NcmContentMetaType_AddOnContent)
+                return flags | kTypeDlc;
+        }
 
         auto containsDlcMarker = [](const std::string& text) {
             const std::string normalized = NormalizeSearchKey(text);
@@ -647,13 +650,31 @@ namespace {
                 || normalized.find("expansion") != std::string::npos;
         };
 
-        if (containsDlcMarker(item.name))
-            return true;
-        if (containsDlcMarker(item.url))
-            return true;
-        if (item.hasAppId && containsDlcMarker(item.appId))
-            return true;
-        return false;
+        if (containsDlcMarker(item.name) || containsDlcMarker(item.url) || (item.hasAppId && containsDlcMarker(item.appId)))
+            flags |= kTypeDlc;
+        return flags;
+    }
+
+    // ponytail: items built after the classification pass (installed/save entries) fall back to
+    // computing on the spot. Cheap, because those lists are small.
+    std::uint8_t ItemTypeFlags(const remoteInstStuff::RemoteItem& item)
+    {
+        return item.typeFlags != 0 ? item.typeFlags : ClassifyItem(item);
+    }
+
+    bool IsBaseItem(const remoteInstStuff::RemoteItem& item)
+    {
+        return (ItemTypeFlags(item) & kTypeBase) != 0;
+    }
+
+    bool IsUpdateItem(const remoteInstStuff::RemoteItem& item)
+    {
+        return (ItemTypeFlags(item) & kTypeUpdate) != 0;
+    }
+
+    bool IsDlcItem(const remoteInstStuff::RemoteItem& item)
+    {
+        return (ItemTypeFlags(item) & kTypeDlc) != 0;
     }
 
     std::string BuildItemIdentityKey(const remoteInstStuff::RemoteItem& item)
@@ -2831,10 +2852,7 @@ namespace inst::ui {
             static_cast<unsigned long long>(this->remoteSections.size()),
             static_cast<unsigned long long>(this->installedSnapshot.baseInstalled.size()),
             static_cast<unsigned long long>(this->installedSnapshot.installedDlcIds.size()));
-        const bool enforceBaseInstallForDlcSection = true;
-        RemoteDlcTrace("filter mode nativeDlcSectionPresent=%d enforceBaseInstallForDlcSection=%d",
-            this->nativeDlcSectionPresent ? 1 : 0,
-            enforceBaseInstallForDlcSection ? 1 : 0);
+        RemoteDlcTrace("filter mode nativeDlcSectionPresent=%d", this->nativeDlcSectionPresent ? 1 : 0);
 
         auto looksLikeDlcTitleId = [](std::uint64_t titleId) {
             const std::uint64_t suffix = titleId & 0xFFFULL;
@@ -2901,35 +2919,17 @@ namespace inst::ui {
             if (section.id != "updates" && section.id != "dlc")
                 continue;
 
-            std::vector<remoteInstStuff::RemoteItem> filtered;
-            filtered.reserve(section.items.size());
-            for (const auto& item : section.items) {
+            // Both branches require the base to be installed, so the check is unconditional.
+            std::erase_if(section.items, [&](const remoteInstStuff::RemoteItem& item) {
                 std::uint32_t installedVersion = 0;
-                std::uint64_t baseTitleId = 0;
-                DeriveBaseTitleId(item, baseTitleId);
-                bool baseIsInstalled = true;
-                if (section.id == "updates" || IsUpdateItem(item) || enforceBaseInstallForDlcSection)
-                    baseIsInstalled = isBaseInstalled(item, installedVersion);
-                if ((section.id == "updates" || IsUpdateItem(item) || enforceBaseInstallForDlcSection) && !baseIsInstalled) {
-                    if (section.id == "dlc")
-                        RemoteDlcTrace("dlc drop reason=base_not_installed name='%s'", TraceNamePreview(item.name).c_str());
-                    continue;
+                if (!isBaseInstalled(item, installedVersion)) {
+                    RemoteDlcTrace("drop reason=base_not_installed name='%s'", TraceNamePreview(item.name).c_str());
+                    return true;
                 }
-                if (section.id == "updates" || IsUpdateItem(item)) {
-                    if (!item.hasAppVersion || item.appVersion > installedVersion)
-                        filtered.push_back(item);
-                } else {
-                    if (isDlcInstalled(item)) {
-                        if (section.id == "dlc")
-                            RemoteDlcTrace("dlc drop reason=already_installed name='%s'", TraceNamePreview(item.name).c_str());
-                        continue;
-                    }
-                    if (section.id == "dlc")
-                        RemoteDlcTrace("dlc keep name='%s'", TraceNamePreview(item.name).c_str());
-                    filtered.push_back(item);
-                }
-            }
-            section.items = std::move(filtered);
+                if (section.id == "updates" || IsUpdateItem(item))
+                    return item.hasAppVersion && item.appVersion <= installedVersion;
+                return isDlcInstalled(item);
+            });
         }
 
         if (inst::config::remoteLegacyMode || this->catalogCacheUsedLegacyFallback) {
@@ -2941,20 +2941,12 @@ namespace inst::ui {
                 if (section.id == "updates" || section.id == "dlc")
                     continue;
 
-                std::vector<remoteInstStuff::RemoteItem> filtered;
-                filtered.reserve(section.items.size());
-                for (const auto& item : section.items) {
-                    if (!IsDlcItem(item)) {
-                        filtered.push_back(item);
-                        continue;
-                    }
+                std::erase_if(section.items, [&](const remoteInstStuff::RemoteItem& item) {
+                    if (!IsDlcItem(item))
+                        return false;
                     std::uint32_t installedVersion = 0;
-                    if (isDlcInstalled(item))
-                        continue;
-                    if (isBaseInstalled(item, installedVersion))
-                        filtered.push_back(item);
-                }
-                section.items = std::move(filtered);
+                    return isDlcInstalled(item) || !isBaseInstalled(item, installedVersion);
+                });
             }
         }
 
@@ -2966,24 +2958,16 @@ namespace inst::ui {
                     (this->saveSyncEnabled && (section.id == "saves" || section.id == "save")))
                     continue;
 
-                std::vector<remoteInstStuff::RemoteItem> filtered;
-                filtered.reserve(section.items.size());
-                for (const auto& item : section.items) {
-                    bool hideInstalledItem = false;
+                std::erase_if(section.items, [&](const remoteInstStuff::RemoteItem& item) {
                     std::uint32_t installedVersion = 0;
-                    if (IsBaseItem(item)) {
-                        hideInstalledItem = isBaseInstalled(item, installedVersion);
-                    } else if (IsUpdateItem(item)) {
-                        if (isBaseInstalled(item, installedVersion) && item.hasAppVersion && item.appVersion <= installedVersion)
-                            hideInstalledItem = true;
-                    } else if (IsDlcItem(item)) {
-                        hideInstalledItem = isDlcInstalled(item);
-                    }
-                    if (!hideInstalledItem) {
-                        filtered.push_back(item);
-                    }
-                }
-                section.items = std::move(filtered);
+                    if (IsBaseItem(item))
+                        return isBaseInstalled(item, installedVersion);
+                    if (IsUpdateItem(item))
+                        return isBaseInstalled(item, installedVersion) && item.hasAppVersion && item.appVersion <= installedVersion;
+                    if (IsDlcItem(item))
+                        return isDlcInstalled(item);
+                    return false;
+                });
             }
         }
 
@@ -3971,7 +3955,11 @@ namespace inst::ui {
         updateLoadingProgress(91, "Scanning Remote sections...");
 
         for (std::size_t i = 0; i < this->remoteSections.size(); i++) {
-            const auto& section = this->remoteSections[i];
+            auto& section = this->remoteSections[i];
+            // Classify once here: the passes below ask IsBase/IsUpdate/IsDlcItem up to eight times
+            // per item, and an IsDlcItem miss normalizes three strings every time.
+            for (auto& item : section.items)
+                item.typeFlags = ClassifyItem(item);
             if (section.id == "updates" || section.id == "update")
                 this->nativeUpdatesSectionPresent = true;
             if (section.id == "dlc" || section.id == "addon" || section.id == "add-on" || section.id == "add_ons")
