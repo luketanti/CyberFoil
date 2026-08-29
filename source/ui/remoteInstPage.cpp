@@ -758,14 +758,6 @@ namespace {
         return primaryPath.string();
     }
 
-    bool IsBaseTitleCurrentlyInstalled(u64 baseTitleId)
-    {
-        s32 metaCount = 0;
-        if (R_FAILED(nsCountApplicationContentMeta(baseTitleId, &metaCount)) || metaCount <= 0)
-            return false;
-        return tin::util::IsTitleInstalled(baseTitleId);
-    }
-
     bool TryGetInstalledUpdateVersionNcm(u64 baseTitleId, u32& outVersion)
     {
         outVersion = 0;
@@ -2048,6 +2040,7 @@ namespace inst::ui {
 
         const s32 chunk = 64;
         s32 offset = 0;
+        std::vector<NsApplicationContentMetaStatus> list;
         while (true) {
             NsApplicationRecord records[chunk];
             s32 outCount = 0;
@@ -2057,27 +2050,40 @@ namespace inst::ui {
 
             for (s32 i = 0; i < outCount; i++) {
                 const u64 baseId = records[i].application_id;
-                const bool installed = IsBaseTitleCurrentlyInstalled(baseId);
+
+                // One content-meta listing answers all three questions we have about a record:
+                // is the base installed, which patch version is on, which DLC ids are owned.
+                // Probing installation with nsGetApplicationControlData instead (the old
+                // IsBaseTitleCurrentlyInstalled path) pulled a 144KB NACP+icon blob off NAND for
+                // every record just to test one boolean. Side effect: an archived title keeps its
+                // control data but loses its content meta, so it now reads as not installed.
+                s32 metaCount = 0;
+                s32 metaOut = 0;
+                if (R_SUCCEEDED(nsCountApplicationContentMeta(baseId, &metaCount)) && metaCount > 0) {
+                    list.resize(static_cast<std::size_t>(metaCount));
+                    if (R_FAILED(nsListApplicationContentMetaStatus(baseId, 0, list.data(), metaCount, &metaOut)))
+                        metaOut = 0;
+                }
+
+                bool installed = false;
+                for (s32 j = 0; j < metaOut; j++) {
+                    if (list[j].meta_type == NcmContentMetaType_Application && list[j].storageID != NcmStorageId_None) {
+                        installed = true;
+                        break;
+                    }
+                }
                 this->installedSnapshot.baseInstalled[baseId] = installed;
                 if (!installed)
                     continue;
 
                 this->installedSnapshot.installedBaseIds.push_back(baseId);
-
-                s32 metaCount = 0;
-                if (R_SUCCEEDED(nsCountApplicationContentMeta(baseId, &metaCount)) && metaCount > 0) {
-                    std::vector<NsApplicationContentMetaStatus> list(static_cast<std::size_t>(metaCount));
-                    s32 metaOut = 0;
-                    if (R_SUCCEEDED(nsListApplicationContentMetaStatus(baseId, 0, list.data(), metaCount, &metaOut)) && metaOut > 0) {
-                        for (s32 j = 0; j < metaOut; j++) {
-                            if (list[j].meta_type == NcmContentMetaType_Patch) {
-                                auto& version = this->installedSnapshot.installedUpdateVersion[baseId];
-                                if (list[j].version > version)
-                                    version = list[j].version;
-                            } else if (list[j].meta_type == NcmContentMetaType_AddOnContent) {
-                                this->installedSnapshot.installedDlcIds.insert(list[j].application_id);
-                            }
-                        }
+                for (s32 j = 0; j < metaOut; j++) {
+                    if (list[j].meta_type == NcmContentMetaType_Patch) {
+                        auto& version = this->installedSnapshot.installedUpdateVersion[baseId];
+                        if (list[j].version > version)
+                            version = list[j].version;
+                    } else if (list[j].meta_type == NcmContentMetaType_AddOnContent) {
+                        this->installedSnapshot.installedDlcIds.insert(list[j].application_id);
                     }
                 }
             }
