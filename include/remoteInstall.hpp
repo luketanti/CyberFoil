@@ -35,6 +35,9 @@ namespace remoteInstStuff {
         bool hasAppId = false;
         bool googleDriveWithoutApiKey = false;
         bool isCheat = false;
+        // Cached base/update/DLC classification; 0 means "not classified yet".
+        // Filled once while sections are built, see ClassifyItem() in ui/remoteInstPage.cpp.
+        std::uint8_t typeFlags = 0;
     };
 
     struct RemoteSection {
