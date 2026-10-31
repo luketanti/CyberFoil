@@ -89,6 +89,7 @@ The schema is specific to CyberFoil; existing Tinfoil theme JSON files need adap
   "version": 1,
   "enabled": true,
   "name": "My Theme",
+  "backgroundDim": 0.3,
   "colors": {
     "background": "#101827",
     "text": "#EAF2FFFF",
@@ -105,7 +106,7 @@ The schema is specific to CyberFoil; existing Tinfoil theme JSON files need adap
 }
 ```
 
-All fields except the JSON object itself are optional. Colors use `#RRGGBB` or `#RRGGBBAA`, with alpha last; six-digit colors are opaque. Supported color names are:
+All fields except the JSON object itself are optional. Colors use `#RGB`, `#RGBA`, `#RRGGBB` or `#RRGGBBAA`, with alpha last; the `#` is optional, so CSS colours and Tinfoil's bare `RRGGBBAA` values both work. Colors without alpha are opaque. Supported color names are:
 
 | Name | Usage |
 | --- | --- |
@@ -122,9 +123,9 @@ All fields except the JSON object itself are optional. Colors use `#RRGGBB` or `
 
 Shared `panel` and `accent` tints retain the original element's opacity, multiplied by the theme color's alpha. Explicit `header`, `footer`, `highlight`, and `scrollbar` values use the supplied alpha directly. Battery/network status and completion/error colors keep their existing meaning.
 
-Image paths are relative to the selected JSON file's directory; use forward slashes, and keep assets inside that directory. `background` and `logo` are aliases for `background.jpg` and `logo.png`. Other image keys match paths under `romfs/images/`, for example `icons/micro-sd.png`, `icons/remote.png`, `icons/usb-install.png`, `icons/checkbox-blank-outline.png`, and `icons/check-box-outline.png`. Override both checkbox images when changing their design. Game cover art continues to come from the title database or Remote.
+Image paths are relative to the selected JSON file's directory; use forward slashes, and keep assets inside that directory. `background` and `logo` are aliases for `background.jpg` and `logo.png`. Other image keys match paths under `romfs/images/`, for example `icons/micro-sd.png`, `icons/remote.png`, `icons/usb-install.png`, `icons/checkbox-blank-outline.png`, and `icons/check-box-outline.png`. Override both checkbox images when changing their design. An empty path (`"icons/settings.png": ""`) hides that image, as it does for the background; for example, `"awoos/5bbdbcf9a5625cd307c9e9bc360d78bd.png": ""` removes the main-menu mascot. A theme's own mascot, or a hidden one, takes priority over `awoo_main.png` and `awoo_inst.png` in `sdmc:/switch/CyberFoil/`. Game cover art continues to come from the title database or Remote.
 
-Use a **1280×720** background and a **480×93** banner (the banner is fitted into that existing space). PNG, JPEG, and WebP work through the bundled image decoder. Assets must be valid, no larger than 16 MiB each, and no larger than 4096 pixels on either side. An empty background path (`"background": ""`) disables background images. Custom background settings override OLED mode's default background; omitted settings keep the current OLED/default appearance and legacy `background.png` behavior.
+Use a **1280×720** background and a **480×93** banner (the banner is fitted into that existing space). A background of any other size is scaled to cover the screen, centred, so a 1920×1080 wallpaper shows whole. `"backgroundDim": 0.35` darkens the theme's background image (0 to 1) so text stays readable over busy art, without editing the image. PNG, JPEG, and WebP work through the bundled image decoder. Assets must be valid, no larger than 16 MiB each, and no larger than 4096 pixels on either side. An empty background path (`"background": ""`) disables background images. Custom background settings override OLED mode's default background; omitted settings keep the current OLED/default appearance and legacy `background.png` behavior.
 
 Missing or corrupt images and invalid individual colors fall back to the existing assets/colors. Malformed JSON or an unsupported schema version restores the default theme. The JSON file is limited to 256 KiB. Removing the theme never removes user assets.
 

@@ -19,6 +19,8 @@ namespace inst::theme {
     pu::ui::Color Color(const std::string& role, pu::ui::Color fallback);
     pu::ui::Color Palette(const std::string& fallbackHex);
     std::string Asset(const std::string& defaultPath);
+    // True when the theme replaces or hides this romfs image.
+    bool HasImage(const std::string& defaultPath);
     void ApplyBackground(pu::ui::Layout& layout, bool oledMode, const std::string& appDir);
 
     // Apply focus text colors without modifying the bundled Plutonium library.

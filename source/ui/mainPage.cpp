@@ -394,7 +394,9 @@ namespace inst::ui {
             this->mainGridLabels.push_back(label);
         }
         this->mainGridHighlight = Rectangle::New(0, 0, kMainGridTileWidth + 8, kMainGridTileHeight + 8, highlightColor, 20);
-        if (std::filesystem::exists(inst::config::appDir + "/awoo_main.png")) this->awooImage = Image::New(410, 190, inst::config::appDir + "/awoo_main.png");
+        // A theme's own mascot (or an empty path hiding it) wins over the legacy override file.
+        if (!inst::theme::HasImage("romfs:/images/awoos/5bbdbcf9a5625cd307c9e9bc360d78bd.png") &&
+            std::filesystem::exists(inst::config::appDir + "/awoo_main.png")) this->awooImage = Image::New(410, 190, inst::config::appDir + "/awoo_main.png");
         else this->awooImage = Image::New(410, 190, inst::theme::Asset("romfs:/images/awoos/5bbdbcf9a5625cd307c9e9bc360d78bd.png"));
         this->Add(this->awooImage);
         this->Add(this->topRect);
