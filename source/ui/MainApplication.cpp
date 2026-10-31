@@ -134,6 +134,8 @@ namespace inst::ui {
     }
 
     void MainApplication::Close() {
+        // The refresh worker owns the remote model until its UI pump joins it.
+        if (this->remoteinstPage && this->remoteinstPage->isLibraryRefreshActive()) return;
         if (IsInstallWorkActive()) {
             instPage::requestInstallCancel();
             return; // Renderer and services must outlive the installation worker.
@@ -244,6 +246,7 @@ namespace inst::ui {
     }
 
     void MainApplication::ApplyPendingTheme() {
+        if (this->remoteinstPage && this->remoteinstPage->isLibraryRefreshActive()) return;
         if (IsInstallWorkActive() || inst::mtp::IsStreamInstallActive()) return;
         if (this->themeReloadStage < 0) {
             if (!this->themeReloadPending) return;

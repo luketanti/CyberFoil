@@ -5,6 +5,9 @@
 #include <filesystem>
 #include <fstream>
 #include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 #include <SDL2/SDL_image.h>
 #include "util/error.hpp"
 #include "util/json.hpp"
@@ -12,8 +15,14 @@
 namespace inst::theme {
     namespace {
         constexpr const char* kImagePrefix = "romfs:/images/";
+        constexpr const char* kBlankImage = "romfs:/images/blank.png";
+        constexpr int kScreenWidth = 1280;
+        constexpr int kScreenHeight = 720;
         std::unordered_map<std::string, pu::ui::Color> g_colors;
         std::unordered_map<std::string, std::string> g_images;
+        std::unordered_set<std::string> g_hiddenImages;
+        std::vector<u8> g_backgroundPixels; // RGBA, kScreenWidth x kScreenHeight; empty when the file is used as-is
+        float g_backgroundDim = 0.0f;
         std::string g_name = "Default";
         bool g_noBackgroundImage = false;
 
@@ -49,13 +58,21 @@ namespace inst::theme {
             return left.R == right.R && left.G == right.G && left.B == right.B && left.A == right.A;
         }
 
+        // Accepts #RGB, #RGBA, #RRGGBB and #RRGGBBAA, with or without the '#',
+        // so colours copied from CSS or from a Tinfoil theme (bare RRGGBBAA) work.
         bool ParseColor(const nlohmann::json& value, pu::ui::Color& result) {
             if (!value.is_string()) return false;
             auto text = value.get<std::string>();
-            if ((text.size() != 7 && text.size() != 9) || text.front() != '#') return false;
-            if (!std::all_of(text.begin() + 1, text.end(), [](unsigned char ch) { return std::isxdigit(ch); })) return false;
-            if (text.size() == 7) text += "FF";
-            result = pu::ui::Color::FromHex(text);
+            if (!text.empty() && text.front() == '#') text.erase(0, 1);
+            if (text.size() != 3 && text.size() != 4 && text.size() != 6 && text.size() != 8) return false;
+            if (!std::all_of(text.begin(), text.end(), [](unsigned char ch) { return std::isxdigit(ch); })) return false;
+            if (text.size() <= 4) {
+                std::string expanded;
+                for (const char ch : text) expanded += std::string(2, ch);
+                text = expanded;
+            }
+            if (text.size() == 6) text += "FF";
+            result = pu::ui::Color::FromHex("#" + text);
             return true;
         }
 
@@ -73,6 +90,54 @@ namespace inst::theme {
             const bool valid = image->w > 0 && image->h > 0 && image->w <= 4096 && image->h <= 4096;
             SDL_FreeSurface(image);
             return valid ? full.string() : std::string();
+        }
+
+        // Plutonium draws a layout's background texture at its own size from the
+        // top-left, so a 1920x1080 wallpaper shows only its top-left corner. Scale
+        // to cover the screen (centred, aspect kept) and apply backgroundDim in
+        // the same pass; a 1280x720 image with no dim is left to Plutonium as-is.
+        bool PrepareBackground(const std::string& path, float dim) {
+            g_backgroundPixels.clear();
+            SDL_Surface* loaded = IMG_Load(path.c_str());
+            if (!loaded) return false;
+            const bool exact = loaded->w == kScreenWidth && loaded->h == kScreenHeight;
+            if (exact && dim <= 0.0f) {
+                SDL_FreeSurface(loaded);
+                return true;
+            }
+            SDL_Surface* source = SDL_ConvertSurfaceFormat(loaded, SDL_PIXELFORMAT_RGBA32, 0);
+            SDL_FreeSurface(loaded);
+            if (!source) return false;
+            SDL_Surface* screen = SDL_CreateRGBSurfaceWithFormat(0, kScreenWidth, kScreenHeight, 32, SDL_PIXELFORMAT_RGBA32);
+            if (!screen) {
+                SDL_FreeSurface(source);
+                return false;
+            }
+            const double scale = std::max(static_cast<double>(kScreenWidth) / source->w, static_cast<double>(kScreenHeight) / source->h);
+            SDL_Rect crop;
+            crop.w = std::min(source->w, static_cast<int>(kScreenWidth / scale + 0.5));
+            crop.h = std::min(source->h, static_cast<int>(kScreenHeight / scale + 0.5));
+            crop.x = (source->w - crop.w) / 2;
+            crop.y = (source->h - crop.h) / 2;
+            SDL_SetSurfaceBlendMode(source, SDL_BLENDMODE_NONE);
+            const bool ok = SDL_BlitScaled(source, &crop, screen, nullptr) == 0;
+            SDL_FreeSurface(source);
+            if (ok) {
+                g_backgroundPixels.resize(static_cast<size_t>(kScreenWidth) * kScreenHeight * 4);
+                const float keep = 1.0f - std::clamp(dim, 0.0f, 1.0f);
+                for (int y = 0; y < kScreenHeight; y++) {
+                    const u8* row = static_cast<const u8*>(screen->pixels) + static_cast<size_t>(y) * screen->pitch;
+                    u8* out = g_backgroundPixels.data() + static_cast<size_t>(y) * kScreenWidth * 4;
+                    for (int x = 0; x < kScreenWidth * 4; x += 4) {
+                        out[x] = static_cast<u8>(row[x] * keep + 0.5f);
+                        out[x + 1] = static_cast<u8>(row[x + 1] * keep + 0.5f);
+                        out[x + 2] = static_cast<u8>(row[x + 2] * keep + 0.5f);
+                        out[x + 3] = row[x + 3];
+                    }
+                }
+            }
+            SDL_FreeSurface(screen);
+            return ok;
         }
 
         pu::ui::Color Tint(const std::string& role, pu::ui::Color fallback) {
@@ -115,6 +180,9 @@ namespace inst::theme {
     void Load(const std::string& appDir, const std::string& selectedFile) {
         g_colors.clear();
         g_images.clear();
+        g_hiddenImages.clear();
+        g_backgroundPixels.clear();
+        g_backgroundDim = 0.0f;
         g_name = "Default";
         g_noBackgroundImage = false;
         if (!ValidManifestPath(selectedFile)) return;
@@ -141,15 +209,31 @@ namespace inst::theme {
                         g_noBackgroundImage = true;
                         continue;
                     }
+                    // An empty path hides any other built-in image, as it already
+                    // does for the background - a theme cannot otherwise remove one.
+                    if (relative.empty()) {
+                        g_hiddenImages.insert(key);
+                        continue;
+                    }
                     const auto image = ValidImage(directory, relative);
                     if (!image.empty()) g_images[key] = image;
                     else LOG_DEBUG("Theme: ignored invalid image %s\n", relative.c_str());
                 }
             }
+            if (root.contains("backgroundDim") && root["backgroundDim"].is_number()) {
+                g_backgroundDim = std::clamp(root["backgroundDim"].get<float>(), 0.0f, 1.0f);
+            }
+            const auto background = g_images.find("background.jpg");
+            if (background != g_images.end() && !g_noBackgroundImage && !PrepareBackground(background->second, g_backgroundDim)) {
+                LOG_DEBUG("Theme: could not prepare background, using it unscaled\n");
+            }
             g_name = ManifestName(root, manifest.stem().string());
         } catch (...) {
             g_colors.clear();
             g_images.clear();
+            g_hiddenImages.clear();
+            g_backgroundPixels.clear();
+            g_backgroundDim = 0.0f;
             g_noBackgroundImage = false;
             g_name = "Default";
             LOG_DEBUG("Theme: could not load theme.json, using defaults\n");
@@ -180,15 +264,24 @@ namespace inst::theme {
 
     std::string Asset(const std::string& defaultPath) {
         if (defaultPath.rfind(kImagePrefix, 0) != 0) return defaultPath;
-        const auto found = g_images.find(defaultPath.substr(std::char_traits<char>::length(kImagePrefix)));
+        const auto key = defaultPath.substr(std::char_traits<char>::length(kImagePrefix));
+        if (g_hiddenImages.count(key)) return kBlankImage;
+        const auto found = g_images.find(key);
         return found == g_images.end() ? defaultPath : found->second;
+    }
+
+    bool HasImage(const std::string& defaultPath) {
+        if (defaultPath.rfind(kImagePrefix, 0) != 0) return false;
+        const auto key = defaultPath.substr(std::char_traits<char>::length(kImagePrefix));
+        return g_hiddenImages.count(key) || g_images.count(key);
     }
 
     void ApplyBackground(pu::ui::Layout& layout, bool oledMode, const std::string& appDir) {
         layout.SetBackgroundColor(Color("background", pu::ui::Color::FromHex(oledMode ? "#000000FF" : "#670000FF")));
         const auto background = g_images.find("background.jpg");
         if (background != g_images.end() && !g_noBackgroundImage) {
-            layout.SetBackgroundImage(background->second);
+            if (!g_backgroundPixels.empty()) layout.SetBackgroundRgbImage(g_backgroundPixels.data(), kScreenWidth, kScreenHeight, 4);
+            else layout.SetBackgroundImage(background->second);
         } else if (!HasColor("background") && !g_noBackgroundImage && !oledMode) {
             std::error_code error;
             const auto legacy = appDir + "/background.png";
@@ -200,6 +293,46 @@ namespace inst::theme {
         : pu::ui::elm::Menu(x, y, width, optionColor, itemSize, itemsToShow, fontSize) {
         SetOnFocusColor(inst::theme::Color("highlight", GetOnFocusColor()));
         SetScrollbarColor(inst::theme::Color("scrollbar", GetScrollbarColor()));
+    }
+
+    void Menu::SetSelectedIndex(s32 index) {
+        const auto count = static_cast<s32>(GetItems().size());
+        if (index < 0 || index >= count) return;
+        pu::ui::elm::Menu::SetSelectedIndex(index);
+        const auto rows = GetNumberOfItemsToShow();
+        // Match Plutonium's explicit-selection viewport, including short lists.
+        visibleTopIndex = index >= count - rows ? std::max<s32>(0, count - rows)
+            : (index < rows ? 0 : index);
+    }
+
+    s32 Menu::GetVisibleTopIndex() {
+        return std::clamp<s32>(visibleTopIndex, 0, std::max<s32>(0, static_cast<s32>(GetItems().size()) - 1));
+    }
+
+    void Menu::SetOnRowsRendered(std::function<void()> callback) {
+        onRowsRendered = std::move(callback);
+    }
+
+    void Menu::OnInput(u64 down, u64 up, u64 held, pu::ui::Touch pos) {
+        // Plutonium delays right-stick movement even on its first press.
+        // Route directions through the left-stick path for identical behavior.
+        const auto normalizeStick = [](u64 buttons) {
+            if (buttons & HidNpadButton_StickRUp) buttons |= HidNpadButton_StickLUp;
+            if (buttons & HidNpadButton_StickRDown) buttons |= HidNpadButton_StickLDown;
+            if (buttons & HidNpadButton_StickRLeft) buttons |= HidNpadButton_StickLLeft;
+            if (buttons & HidNpadButton_StickRRight) buttons |= HidNpadButton_StickLRight;
+            return buttons & ~(HidNpadButton_StickRUp | HidNpadButton_StickRDown |
+                HidNpadButton_StickRLeft | HidNpadButton_StickRRight);
+        };
+        pu::ui::elm::Menu::OnInput(normalizeStick(down), normalizeStick(up), normalizeStick(held), pos);
+        if (!GetItems().empty()) {
+            // Ordinary movement/touch preserves the viewport unless selection
+            // crosses an edge. Wrapping naturally moves it to the first/last page.
+            const auto index = GetSelectedIndex();
+            const auto rows = GetNumberOfItemsToShow();
+            if (index < visibleTopIndex) visibleTopIndex = index;
+            else if (index >= visibleTopIndex + rows) visibleTopIndex = index - rows + 1;
+        }
     }
 
     void Menu::OnRender(pu::ui::render::Renderer::Ref& drawer, s32 x, s32 y) {
@@ -215,10 +348,13 @@ namespace inst::theme {
                     focusedItem = item;
                     item->SetColor(selectedColor);
                     // Rebuild text textures once per focus change, not on every frame.
-                    pu::ui::elm::Menu::SetSelectedIndex(index);
+                    this->SetSelectedIndex(index);
                 }
             }
         }
         pu::ui::elm::Menu::OnRender(drawer, x, y);
+        // Row overlays follow the viewport used for this frame, before the
+        // layout forwards this frame's input to the menu.
+        if (onRowsRendered) onRowsRendered();
     }
 }

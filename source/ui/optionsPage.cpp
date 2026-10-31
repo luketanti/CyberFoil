@@ -32,7 +32,7 @@ namespace inst::ui {
         class RemoteFormMenu final : public inst::theme::Menu {
         public:
             explicit RemoteFormMenu(bool& dropdownVisible)
-                : inst::theme::Menu(260, 152, 760, COLOR("#00000000"), 44, 10, 22), dropdownVisible(dropdownVisible) {}
+                : inst::theme::Menu(260, 152, 760, COLOR("#00000000"), 40, 11, 22), dropdownVisible(dropdownVisible) {}
             void OnInput(u64 down, u64 up, u64 held, pu::ui::Touch pos) override {
                 if (!dropdownVisible) inst::theme::Menu::OnInput(down, up, held, pos);
             }
@@ -357,8 +357,8 @@ namespace inst::ui {
         this->Add(this->remoteFormTitle);
         this->Add(this->remoteFormHint);
         this->Add(this->remoteFormMenu);
-        for (int i = 0; i < 9; ++i) {
-            auto value = TextBlock::New(510, 152 + i * 44, "", 22);
+        for (int i = 0; i < 10; ++i) {
+            auto value = TextBlock::New(510, 152 + i * 40, "", 22);
             value->SetColor(COLOR("#FFFFFFFF"));
             value->SetVisible(false);
             this->remoteFormValues.push_back(value);
@@ -851,6 +851,12 @@ namespace inst::ui {
         else if (this->remoteFormProfile.port <= 0 || this->remoteFormProfile.port > 65535)
             this->remoteFormProfile.port = inst::config::DefaultPortForProtocol(this->remoteFormProfile.protocol);
         this->remoteFormProfile.path = inst::config::NormalizeRemotePath(this->remoteFormProfile.path);
+        if (!this->remoteFormProfile.lanUrl.empty() || !this->remoteFormProfile.wanUrl.empty()) {
+            std::string protocol, host;
+            int port = 0;
+            inst::config::ParseRemoteUrl(inst::config::BuildRemoteUrl(this->remoteFormProfile),
+                protocol, host, port, this->remoteFormProfile.path);
+        }
         this->remoteFormWasActive = wasActive;
         this->remoteFormReturnToList = returnToList;
         this->remoteFormReturnIndex = returnIndex;
@@ -904,11 +910,11 @@ namespace inst::ui {
             return scheme == std::string::npos ? url : url.substr(scheme + 3);
         };
         const std::vector<std::string> labels = {
-            "Mode", "LAN protocol", "LAN URL", "Remote URL", "Connection", "Username", "Password", "Title", "Favourite", "Save Remote"
+            "Mode", "LAN protocol", "LAN URL", "Remote URL", "Path (optional)", "Connection", "Username", "Password", "Title", "Favourite", "Save Remote"
         };
         const std::vector<std::string> values = {
             mode, this->remoteFormLanProtocol == "https" ? "HTTPS" : "HTTP",
-            addressOnly(this->remoteFormProfile.lanUrl), addressOnly(this->remoteFormProfile.wanUrl), connection,
+            addressOnly(this->remoteFormProfile.lanUrl), addressOnly(this->remoteFormProfile.wanUrl), this->remoteFormProfile.path, connection,
             this->remoteFormProfile.username, this->remoteFormProfile.password.empty() ? "Not set" : "Set",
             this->remoteFormProfile.title, this->remoteFormProfile.favourite ? "Yes" : "No"
         };
@@ -922,7 +928,7 @@ namespace inst::ui {
         this->remoteFormMenu->SetSelectedIndex(std::min(selected, static_cast<int>(labels.size()) - 1));
         for (std::size_t row = 0; row < values.size(); ++row) {
             auto& text = this->remoteFormValues[row];
-            std::string display = values[row].empty() ? (row == 7 ? "Required" : "Not set") : values[row];
+            std::string display = values[row].empty() ? (row == 8 ? "Required" : "Not set") : values[row];
             for (char& c : display) if (static_cast<unsigned char>(c) < 32 || c == 127) c = ' ';
             // Bound measurement work, preserving UTF-8 boundaries. Values are
             // clipped for display only; the editor receives the full saved URL.
@@ -944,7 +950,7 @@ namespace inst::ui {
                 }
                 text->SetText(display.substr(0, boundaries[low]) + "...");
             }
-            text->SetY(152 + static_cast<int>(row) * 44 + (44 - text->GetTextHeight()) / 2);
+            text->SetY(152 + static_cast<int>(row) * 40 + (40 - text->GetTextHeight()) / 2);
         }
     }
 
@@ -991,25 +997,53 @@ namespace inst::ui {
                 const auto value = TrimString(inst::util::softwareKeyboard("Enter IP or hostname[:port]", currentAddress, 512));
                 if (!value.empty()) {
                     std::string normalized;
-                    if (inst::config::NormalizeRemoteAddress(value, lan ? this->remoteFormLanProtocol : "https", normalized)) endpoint = normalized;
+                    if (inst::config::NormalizeRemoteAddress(value, lan ? this->remoteFormLanProtocol : "https", normalized)) {
+                        std::string protocol, host, path;
+                        int port = 0;
+                        inst::config::ParseRemoteUrl(normalized, protocol, host, port, path);
+                        if (path.empty()) normalized += this->remoteFormProfile.path;
+                        else this->remoteFormProfile.path = path;
+                        endpoint = normalized;
+                    }
                     else mainApp->CreateShowDialog("Invalid address", lan ?
                         "Enter a valid IP or hostname and port, without a scheme. Choose HTTP or HTTPS under LAN protocol." :
                         "Enter a valid IP or hostname and port. Remote connections require HTTPS.", {"common.ok"_lang}, true);
                 }
             }
         } else if (field == 4) {
+            const int action = mainApp->CreateShowDialog("Remote path",
+                "Optional URL path, for example /remote.json. Editing or clearing it applies to both LAN and Remote URLs.",
+                {"Edit", "Clear", "common.cancel"_lang}, false);
+            if (action == 0 || action == 1) {
+                const auto path = action == 1 ? std::string{} : inst::config::NormalizeRemotePath(
+                    inst::util::softwareKeyboard("Enter URL path (optional)", this->remoteFormProfile.path, 512));
+                std::string lan, wan, validated;
+                const auto withPath = [&](const std::string& endpoint, std::string& result) {
+                    if (endpoint.empty()) return true;
+                    const auto slash = endpoint.find('/', endpoint.find("://") + 3);
+                    return inst::config::NormalizeRemoteEndpoint(endpoint.substr(0, slash) + path, result);
+                };
+                if (withPath(this->remoteFormProfile.lanUrl, lan) && withPath(this->remoteFormProfile.wanUrl, wan) &&
+                    (path.empty() || inst::config::NormalizeRemoteEndpoint("https://example.com" + path, validated))) {
+                    // Validate before changing either endpoint, including when no URL is entered yet.
+                    this->remoteFormProfile.path = path;
+                    this->remoteFormProfile.lanUrl = lan;
+                    this->remoteFormProfile.wanUrl = wan;
+                } else mainApp->CreateShowDialog("Invalid path", "Enter a valid URL path.", {"common.ok"_lang}, true);
+            }
+        } else if (field == 5) {
             const int choice = mainApp->CreateShowDialog("Connection preference", "Auto tries LAN connectivity first, then WAN if LAN is unreachable.",
                 {"Auto", "LAN only", "WAN only", "common.cancel"_lang}, false);
             if (choice >= 0 && choice < 3) this->remoteFormProfile.connection = choice == 0 ? "auto" : (choice == 1 ? "lan" : "wan");
-        } else if (field == 5) {
-            this->remoteFormProfile.username = inst::util::softwareKeyboard("options.remote.user_hint"_lang, this->remoteFormProfile.username, 100);
         } else if (field == 6) {
-            this->remoteFormProfile.password = inst::util::softwareKeyboard("options.remote.pass_hint"_lang, this->remoteFormProfile.password, 100);
+            this->remoteFormProfile.username = inst::util::softwareKeyboard("options.remote.user_hint"_lang, this->remoteFormProfile.username, 100);
         } else if (field == 7) {
-            this->remoteFormProfile.title = TrimString(inst::util::softwareKeyboard("Enter Remote title (required)", this->remoteFormProfile.title, 80));
+            this->remoteFormProfile.password = inst::util::softwareKeyboard("options.remote.pass_hint"_lang, this->remoteFormProfile.password, 100);
         } else if (field == 8) {
-            this->remoteFormProfile.favourite = !this->remoteFormProfile.favourite;
+            this->remoteFormProfile.title = TrimString(inst::util::softwareKeyboard("Enter Remote title (required)", this->remoteFormProfile.title, 80));
         } else if (field == 9) {
+            this->remoteFormProfile.favourite = !this->remoteFormProfile.favourite;
+        } else if (field == 10) {
             this->saveRemoteForm();
             return;
         }
@@ -1187,10 +1221,10 @@ namespace inst::ui {
             }
             mainApp->LoadLayout(mainApp->mainPage);
         }
-        const bool leftPressed = (Down & (HidNpadButton_Left | HidNpadButton_StickLLeft)) != 0;
-        const bool rightPressed = (Down & (HidNpadButton_Right | HidNpadButton_StickLRight)) != 0;
-        const bool upPressed = (Down & (HidNpadButton_Up | HidNpadButton_StickLUp)) != 0;
-        const bool downPressed = (Down & (HidNpadButton_Down | HidNpadButton_StickLDown)) != 0;
+        const bool leftPressed = (Down & (HidNpadButton_Left | HidNpadButton_StickLLeft | HidNpadButton_StickRLeft)) != 0;
+        const bool rightPressed = (Down & (HidNpadButton_Right | HidNpadButton_StickLRight | HidNpadButton_StickRRight)) != 0;
+        const bool upPressed = (Down & (HidNpadButton_Up | HidNpadButton_StickLUp | HidNpadButton_StickRUp)) != 0;
+        const bool downPressed = (Down & (HidNpadButton_Down | HidNpadButton_StickLDown | HidNpadButton_StickRDown)) != 0;
 
         if (!this->remoteListVisible && leftPressed && !this->tabsFocused) {
             this->tabsFocused = true;

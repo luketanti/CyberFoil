@@ -225,7 +225,9 @@ namespace inst::ui {
         this->progressDetailText = TextBlock::New(0, 646, "", 22);
         this->progressDetailText->SetColor(COLOR("#FFFFFFFF"));
         this->progressDetailText->SetVisible(false);
-        if (std::filesystem::exists(inst::config::appDir + "/awoo_inst.png")) this->awooImage = Image::New(410, 190, inst::config::appDir + "/awoo_inst.png");
+        // A theme's own mascot (or an empty path hiding it) wins over the legacy override file.
+        if (!inst::theme::HasImage("romfs:/images/awoos/7d8a05cddfef6da4901b20d2698d5a71.png") &&
+            std::filesystem::exists(inst::config::appDir + "/awoo_inst.png")) this->awooImage = Image::New(410, 190, inst::config::appDir + "/awoo_inst.png");
         else this->awooImage = Image::New(510, 166, inst::theme::Asset("romfs:/images/awoos/7d8a05cddfef6da4901b20d2698d5a71.png"));
         this->installIconImage = Image::New(kInstallIconX, kInstallIconY, inst::theme::Asset("romfs:/images/awoos/7d8a05cddfef6da4901b20d2698d5a71.png"));
         this->installIconImage->SetWidth(kInstallIconSize);
@@ -592,6 +594,16 @@ namespace inst::ui {
         }
         int tap = 0;
         if (DetectBottomHintTap(Pos, bottomHintTouch, 668, 52, tap)) Down |= FindBottomHintButton(bottomHintSegments, tap);
+        // Use the same queue movement and repeat timing for all directional controls.
+        const auto queueDirections = [](u64 buttons) {
+            if (buttons & (HidNpadButton_StickLUp | HidNpadButton_StickRUp)) buttons |= HidNpadButton_Up;
+            if (buttons & (HidNpadButton_StickLDown | HidNpadButton_StickRDown)) buttons |= HidNpadButton_Down;
+            if (buttons & (HidNpadButton_StickLLeft | HidNpadButton_StickRLeft)) buttons |= HidNpadButton_Left;
+            if (buttons & (HidNpadButton_StickLRight | HidNpadButton_StickRRight)) buttons |= HidNpadButton_Right;
+            return buttons;
+        };
+        Down = queueDirections(Down);
+        Held = queueDirections(Held);
         const u64 directions = HidNpadButton_Up | HidNpadButton_Down | HidNpadButton_Left | HidNpadButton_Right;
         const u64 held = installActive ? Held & directions : 0, now = armGetSystemTick(), frequency = armGetSystemTickFreq();
         if (held != queueHeldDirection) { queueHeldDirection = held; queueRepeatAt = now + frequency * 35 / 100; }

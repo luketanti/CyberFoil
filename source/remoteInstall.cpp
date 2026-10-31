@@ -1,11 +1,13 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <curl/curl.h>
 #include <filesystem>
 #include <limits>
+#include <memory>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -1313,6 +1315,10 @@ namespace {
                             item.saveId = entry["save_id"].get<std::string>();
                         else if (entry.contains("saveId") && entry["saveId"].is_string())
                             item.saveId = entry["saveId"].get<std::string>();
+                        if (entry.contains("save_type") && entry["save_type"].is_string())
+                            item.saveType = entry["save_type"].get<std::string>();
+                        else if (entry.contains("saveType") && entry["saveType"].is_string())
+                            item.saveType = entry["saveType"].get<std::string>();
                         if (entry.contains("note") && entry["note"].is_string())
                             item.saveNote = entry["note"].get<std::string>();
                         else if (entry.contains("save_note") && entry["save_note"].is_string())
@@ -1527,11 +1533,10 @@ namespace remoteInstStuff {
             curl_easy_getinfo(curl, CURLINFO_CONTENT_TYPE, &contentType);
             if (headerList)
                 curl_slist_free_all(headerList);
-            curl_easy_cleanup(curl);
-
             result.responseCode = responseCode;
             result.effectiveUrl = effectiveUrl ? effectiveUrl : "";
             result.contentType = contentType ? contentType : "";
+            curl_easy_cleanup(curl);
 
             if (rc != CURLE_OK) {
                 result.error = std::string(curl_easy_strerror(rc)) + " (curl=" + std::to_string(static_cast<int>(rc)) + ")";
@@ -1720,6 +1725,10 @@ namespace remoteInstStuff {
                     item.saveId = entry["save_id"].get<std::string>();
                 else if (entry.contains("saveId") && entry["saveId"].is_string())
                     item.saveId = entry["saveId"].get<std::string>();
+                if (entry.contains("save_type") && entry["save_type"].is_string())
+                    item.saveType = entry["save_type"].get<std::string>();
+                else if (entry.contains("saveType") && entry["saveType"].is_string())
+                    item.saveType = entry["saveType"].get<std::string>();
                 if (entry.contains("note") && entry["note"].is_string())
                     item.saveNote = entry["note"].get<std::string>();
                 else if (entry.contains("save_note") && entry["save_note"].is_string())
@@ -2285,6 +2294,179 @@ namespace remoteInstStuff {
         if (tryLegacyFallback())
             return sections;
         return sections;
+    }
+
+    bool FetchRemoteTitleInfo(const std::string& remoteUrl, std::uint64_t titleId, const std::string& user, const std::string& pass, RemoteTitleInfo& info, std::string& error, const std::function<bool()>& canceled) {
+        info = {};
+        error.clear();
+        if (titleId == 0 || canceled()) return false;
+        const auto base = NormalizeRemoteUrl(remoteUrl);
+        const std::string url = BuildFullUrl(base, "/api/shop/title-info/" + FormatTitleIdHexUpper(titleId));
+        std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> handle(curl_easy_init(), curl_easy_cleanup);
+        if (!handle) { error = "Unable to start the screenshot request."; return false; }
+        CURL* curl = handle.get();
+        FetchResult response;
+        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
+        curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+        curl_easy_setopt(curl, CURLOPT_USERAGENT, inst::curl::getDefaultUserAgent().c_str());
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 10000L);
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 3000L);
+        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+        curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, +[](void* context, curl_off_t, curl_off_t, curl_off_t, curl_off_t) -> int {
+            return (*static_cast<const std::function<bool()>*>(context))() ? 1 : 0;
+        });
+        curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &canceled);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, +[](char* data, std::size_t size, std::size_t count, void* context) -> std::size_t {
+            auto& body = *static_cast<std::string*>(context);
+            constexpr std::size_t limit = 2 * 1024 * 1024;
+            if (size != 0 && count > (limit - body.size()) / size) return 0;
+            body.append(data, size * count);
+            return size * count;
+        });
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response.body);
+        curl_slist* headerList = nullptr;
+        for (const auto& header : BuildLegacyHeaders(url, user, pass)) headerList = curl_slist_append(headerList, header.c_str());
+        // Match the icon API: Basic authentication and host-verification headers on every request.
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headerList);
+        const std::string credentials = user + ":" + pass;
+        if (!user.empty() || !pass.empty()) {
+            curl_easy_setopt(curl, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
+            curl_easy_setopt(curl, CURLOPT_USERPWD, credentials.c_str());
+        }
+        response.curlCode = curl_easy_perform(curl);
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response.responseCode);
+        if (headerList) curl_slist_free_all(headerList);
+        if (canceled()) return false;
+        if (response.curlCode != CURLE_OK) {
+            error = response.curlCode == CURLE_OPERATION_TIMEDOUT ? "Screenshot request timed out. Close the description and try again."
+                : "Unable to retrieve screenshots. Check the remote connection.";
+            return false;
+        }
+        // Shop auth/host-verification failures can be JSON errors with HTTP 200.
+        const auto payload = nlohmann::json::parse(response.body, nullptr, false);
+        if (payload.is_object() && payload.contains("error")) {
+            error = payload["error"].is_string() ? payload["error"].get<std::string>() : "The remote could not provide screenshot information.";
+            if (error.empty()) error = "The remote could not provide screenshot information.";
+            error = "Screenshots: " + error;
+            return false;
+        }
+        if (response.responseCode < 200 || response.responseCode >= 300) {
+            if (response.responseCode == 404) error = "Update AeroFoil to enable the shop screenshot API.";
+            else if (response.responseCode == 403) error = "Screenshots are restricted for this title.";
+            else if (response.responseCode == 503) error = "Title information is temporarily unavailable. Close the description and try again.";
+            else error = "Screenshot request failed (HTTP " + std::to_string(response.responseCode) + ").";
+            return false;
+        }
+        if (!payload.is_object() || !payload.contains("success") || !payload["success"].is_boolean() || !payload["success"].get<bool>()
+            || !payload.contains("screenshots") || !payload["screenshots"].is_array()) {
+            error = "The remote returned invalid screenshot information.";
+            return false;
+        }
+        if (payload.contains("description") && payload["description"].is_string()) info.description = payload["description"].get<std::string>();
+        for (const auto& entry : payload["screenshots"]) {
+            if (info.screenshots.size() >= 12) break;
+            if (!entry.is_string()) continue;
+            const auto raw = entry.get<std::string>();
+            if (raw.empty()) continue;
+            // Resolve root-relative and relative URLs without rebuilding the screenshot index.
+            // Returned indexes may have gaps, and returned query parameters must be preserved.
+            CURLU* resolved = curl_url();
+            char* absolute = nullptr;
+            std::string screenshotUrl;
+            if (resolved) {
+                if (curl_url_set(resolved, CURLUPART_URL, (base + "/").c_str(), 0) == CURLUE_OK
+                    && curl_url_set(resolved, CURLUPART_URL, raw.c_str(), 0) == CURLUE_OK
+                    && curl_url_get(resolved, CURLUPART_URL, &absolute, 0) == CURLUE_OK) screenshotUrl = absolute;
+                if (absolute) curl_free(absolute);
+                curl_url_cleanup(resolved);
+            }
+            if ((screenshotUrl.rfind("https://", 0) == 0 || screenshotUrl.rfind("http://", 0) == 0)
+                && std::find(info.screenshots.begin(), info.screenshots.end(), screenshotUrl) == info.screenshots.end())
+                info.screenshots.push_back(screenshotUrl);
+        }
+        return true;
+    }
+
+    bool DownloadRemoteScreenshot(const std::string& initialUrl, const std::string& remoteUrl, const std::string& user, const std::string& pass, const std::string& path, const std::function<bool()>& canceled) {
+        struct Transfer {
+            FILE* file;
+            const std::function<bool()>* canceled;
+            std::size_t received = 0;
+        };
+        std::string url = initialUrl;
+        const auto credentialOrigin = GetUrlOrigin(NormalizeRemoteUrl(remoteUrl));
+        for (int redirect = 0; redirect < 5; ++redirect) {
+            if (canceled() || (url.rfind("https://", 0) != 0 && url.rfind("http://", 0) != 0)) break;
+            CURL* curl = curl_easy_init();
+            if (!curl) break;
+            FILE* file = std::fopen(path.c_str(), "wb");
+            if (!file) { curl_easy_cleanup(curl); break; }
+            Transfer transfer{file, &canceled};
+            curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+            curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+            // Follow redirects explicitly so Remote credentials never reach a CDN.
+            curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
+            curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+            curl_easy_setopt(curl, CURLOPT_USERAGENT, inst::curl::getDefaultUserAgent().c_str());
+            curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 15000L);
+            curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 3000L);
+            curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
+            curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+            curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, +[](void* context, curl_off_t, curl_off_t, curl_off_t, curl_off_t) -> int {
+                return (*static_cast<Transfer*>(context)->canceled)() ? 1 : 0;
+            });
+            curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &transfer);
+            curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, +[](char* data, std::size_t size, std::size_t count, void* context) -> std::size_t {
+                auto& state = *static_cast<Transfer*>(context);
+                constexpr std::size_t limit = 8 * 1024 * 1024;
+                if ((*state.canceled)() || (size != 0 && count > (limit - state.received) / size)) return 0;
+                const auto bytes = size * count;
+                const auto written = std::fwrite(data, 1, bytes, state.file);
+                state.received += written;
+                return written;
+            });
+            curl_easy_setopt(curl, CURLOPT_WRITEDATA, &transfer);
+            curl_slist* headers = nullptr;
+            std::string credentials;
+            if (GetUrlOrigin(url) == credentialOrigin) {
+                for (const auto& header : BuildLegacyHeaders(url, user, pass)) headers = curl_slist_append(headers, header.c_str());
+                curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+                if (!user.empty() || !pass.empty()) {
+                    credentials = user + ":" + pass;
+                    curl_easy_setopt(curl, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
+                    curl_easy_setopt(curl, CURLOPT_USERPWD, credentials.c_str());
+                }
+            }
+            const auto result = curl_easy_perform(curl);
+            long status = 0;
+            char* nextUrl = nullptr;
+            curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+            curl_easy_getinfo(curl, CURLINFO_REDIRECT_URL, &nextUrl);
+            const std::string next = nextUrl ? nextUrl : "";
+            char* contentType = nullptr;
+            curl_easy_getinfo(curl, CURLINFO_CONTENT_TYPE, &contentType);
+            const std::string mime = contentType ? contentType : "";
+            if (headers) curl_slist_free_all(headers);
+            curl_easy_cleanup(curl);
+            std::fclose(file);
+            if (result == CURLE_OK && status >= 200 && status < 300 && !canceled()) {
+                // A shop JSON error can also be HTTP 200. Never pass it to the image decoder or cache.
+                unsigned char signature[3] = {};
+                FILE* image = std::fopen(path.c_str(), "rb");
+                const auto read = image ? std::fread(signature, 1, sizeof(signature), image) : 0;
+                if (image) std::fclose(image);
+                if (mime.rfind("image/jpeg", 0) == 0 && read == sizeof(signature)
+                    && signature[0] == 0xFF && signature[1] == 0xD8 && signature[2] == 0xFF) return true;
+                break;
+            }
+            if (result != CURLE_OK || next.empty()) break;
+            url = next;
+        }
+        std::error_code error;
+        std::filesystem::remove(path, error);
+        return false;
     }
 
     bool DownloadCheatText(const RemoteItem& item, const std::string& user, const std::string& pass, std::string& text, std::string& error)
@@ -2897,6 +3079,9 @@ namespace remoteInstStuff {
                 inst::ui::mainApp->CreateShowDialog(std::to_string(completedCount) + "inst.info_page.desc0"_lang, "inst.info_page.complete"_lang, {"common.ok"_lang}, true);
             else
                 inst::ui::mainApp->CreateShowDialog(currentName + "inst.info_page.desc1"_lang, "inst.info_page.complete"_lang, {"common.ok"_lang}, true);
+            // Replace the acknowledged dialog immediately, including while
+            // the success sound and install-service cleanup finish.
+            inst::ui::mainApp->remoteinstPage->showLibraryRefresh();
             audioThread.join();
         }
 

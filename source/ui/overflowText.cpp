@@ -195,7 +195,8 @@ void OverflowText::Update(bool forceReset)
     const u64 endPauseTicks = (freq * kMarqueeEndPauseMs) / 1000;
     const u64 fadeDurationTicks = (freq * kMarqueeFadeDurationMs) / 1000;
 
-    this->marqueeText->SetText(this->fullText);
+    if (this->marqueeText->GetText() != this->fullText)
+        this->marqueeText->SetText(this->fullText);
     this->marqueeMaxOffset = this->marqueeText->GetTextWidth() - this->width;
     if (this->marqueeMaxOffset < 0)
         this->marqueeMaxOffset = 0;
@@ -494,7 +495,8 @@ void OverflowText::updateStaticLabel()
     if (this->baseText == nullptr)
         return;
 
-    this->baseText->SetText(this->clippedText);
+    if (this->baseText->GetText() != this->clippedText)
+        this->baseText->SetText(this->clippedText);
     // Non-overflow text is centered; overflow text is left-aligned for fade hint.
     int textX = this->x;
     if (!this->overflowing)

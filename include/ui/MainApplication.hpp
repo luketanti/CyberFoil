@@ -24,6 +24,7 @@ namespace inst::ui {
             void Close();
             void OnLoad() override;
             void RefreshInputDevice(bool force = false);
+            HidAnalogStickState GetAnalogStick(unsigned index) const { return padGetStickPos(&this->input_pad, index); }
             void RecreateLayouts();
             void RequestThemeReload();
             bool IsUiThread() const { return uiDispatcher.isOwner(); }

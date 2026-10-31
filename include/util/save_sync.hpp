@@ -10,6 +10,7 @@
 namespace inst::save_sync {
     struct SaveSyncRemoteVersion {
         std::string saveId;
+        std::string saveType = "unknown";
         std::string note;
         std::string createdAt;
         std::uint64_t createdTs = 0;
@@ -21,6 +22,8 @@ namespace inst::save_sync {
         std::uint64_t titleId = 0;
         std::string titleName;
         bool localAvailable = false;
+        bool deviceSave = false;
+        std::string saveType = "unknown";
         bool remoteAvailable = false;
         std::string remoteDownloadUrl;
         std::uint64_t remoteSize = 0;
