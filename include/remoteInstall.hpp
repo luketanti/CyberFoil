@@ -17,6 +17,7 @@ namespace remoteInstStuff {
         std::string iconUrl;
         std::string appId;
         std::string saveId;
+        std::string saveType = "unknown";
         std::string saveNote;
         std::string saveCreatedAt;
         std::string cheatTitleId;

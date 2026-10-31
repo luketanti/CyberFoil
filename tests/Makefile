@@ -5,6 +5,8 @@ ROOT := ..
 OUT ?= /tmp/cyberfoil-lan-discovery-tests
 .PHONY: test
 test:
+	$(CXX) $(CXXFLAGS) -Isave_data_stubs -I$(ROOT)/include save_data_policy_tests.cpp -o $(OUT)-save-data
+	$(OUT)-save-data
 	$(CXX) $(CXXFLAGS) -I$(ROOT)/include file_selection_tests.cpp -o $(OUT)-selection
 	$(OUT)-selection
 	$(CXX) $(CXXFLAGS) -I$(ROOT)/include ui_dispatcher_tests.cpp -o $(OUT)-ui

@@ -13,6 +13,7 @@
 ## Save Sync (Only works with compatible [AeroFoil](https://github.com/luketanti/AeroFoil))
 - Available when the account has backup access.
 - Shows local console saves and remote server save data backups in a dedicated `Saves` section.
+- Includes shared device saves alongside the selected user's saves. Account and device saves have separate entries and version histories, including when a title has both. Device saves are marked `[Device]` and Backup All includes them automatically. Uploads require AeroFoil's save-type API. Existing untyped backups remain visible as `[Unknown type]`; download them from AeroFoil and reupload them with the correct Account/Device type before restoring.
 - Upload supports version notes.
 - Download/delete of remote save data backups supports per-version selection with an in-page selector layout.
 

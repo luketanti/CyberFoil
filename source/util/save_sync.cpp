@@ -5,6 +5,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <sstream>
 #include <system_error>
 #include <unordered_map>
@@ -18,6 +19,7 @@
 #include <zlib.h>
 
 #include "util/save_sync.hpp"
+#include "util/save_data_policy.hpp"
 
 #include "util/config.hpp"
 #include "util/curl.hpp"
@@ -131,11 +133,6 @@ namespace {
             return true;
         }
         return false;
-    }
-
-    bool AccountUidEquals(const AccountUid& a, const AccountUid& b)
-    {
-        return a.uid[0] == b.uid[0] && a.uid[1] == b.uid[1];
     }
 
     std::string FormatSizeForUi(std::uint64_t bytes)
@@ -256,6 +253,12 @@ namespace {
         return baseUrl + "/api/saves/list";
     }
 
+    std::string ScopeSaveUrl(const std::string& url, const std::string& saveType)
+    {
+        if (url.find("save_type=") != std::string::npos) return url;
+        return url + (url.find('?') == std::string::npos ? "?" : "&") + "save_type=" + saveType;
+    }
+
     std::string BuildFullUrl(const std::string& baseUrl, const std::string& pathOrUrl)
     {
         if (pathOrUrl.empty())
@@ -324,7 +327,7 @@ namespace {
         return ResolveActiveUser(outUid, error);
     }
 
-    bool EnumerateLocalSaves(const AccountUid& uid, std::unordered_map<std::uint64_t, inst::save_sync::SaveSyncEntry>& entries, std::string& warning)
+    bool EnumerateLocalSaves(const AccountUid& uid, std::map<inst::save_sync::SaveEntryKey, inst::save_sync::SaveSyncEntry>& entries, std::string& warning)
     {
         warning.clear();
         FsSaveDataInfoReader reader = {};
@@ -348,16 +351,16 @@ namespace {
 
             for (s64 i = 0; i < outCount; i++) {
                 const FsSaveDataInfo& info = infoBuf[i];
-                if (info.save_data_type != FsSaveDataType_Account)
-                    continue;
-                if (!accountUidIsValid(&uid) || !AccountUidEquals(info.uid, uid))
-                    continue;
-                if (info.application_id == 0)
+                const bool deviceSave = info.save_data_type == FsSaveDataType_Device;
+                if (!inst::save_sync::IsBackupSave(info, uid))
                     continue;
 
-                auto& entry = entries[info.application_id];
+                const std::string saveType = deviceSave ? "device" : "account";
+                auto& entry = entries[{info.application_id, saveType}];
                 entry.titleId = info.application_id;
                 entry.localAvailable = true;
+                entry.deviceSave = deviceSave;
+                entry.saveType = saveType;
                 if (entry.titleName.empty())
                     entry.titleName = tin::util::GetTitleName(info.application_id, NcmContentMetaType_Application);
             }
@@ -834,7 +837,7 @@ namespace {
         return true;
     }
 
-    bool HttpDownloadFileWithAuthAndProgress(const std::string& url, const std::string& outputPath, const std::string& user, const std::string& pass, long timeoutMs, std::string& error)
+    bool HttpDownloadFileWithAuthAndProgress(const std::string& url, const std::string& outputPath, const std::string& user, const std::string& pass, long timeoutMs, const std::string& expectedSaveType, std::string& error)
     {
         error.clear();
         if (curl_global_init(CURL_GLOBAL_ALL) != CURLE_OK) {
@@ -856,6 +859,21 @@ namespace {
         }
 
         UiProgressThrottle throttle{};
+        std::string responseSaveType;
+        curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, +[](char* data, size_t size, size_t count, void* context) -> size_t {
+            const size_t length = size * count;
+            auto& saveType = *static_cast<std::string*>(context);
+            const std::string line(data, length);
+            if (line.rfind("HTTP/", 0) == 0) saveType.clear(); // Discard redirect/interim response headers.
+            const auto colon = line.find(':');
+            if (colon != std::string::npos) {
+                std::string name = line.substr(0, colon);
+                std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                if (name == "x-save-type") saveType = TrimAscii(line.substr(colon + 1));
+            }
+            return length;
+        });
+        curl_easy_setopt(curl, CURLOPT_HEADERDATA, &responseSaveType);
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
@@ -927,6 +945,11 @@ namespace {
                 ss << "Save download failed with HTTP " << responseCode;
                 error = ss.str();
             }
+            return false;
+        }
+        if (!inst::save_sync::CanRestoreSaveType(responseSaveType, expectedSaveType)) {
+            std::remove(outputPath.c_str());
+            error = "The server did not confirm the expected save type. No local save data was changed.";
             return false;
         }
         return true;
@@ -1016,7 +1039,7 @@ namespace {
         return false;
     }
 
-    bool UploadZipMultipart(const std::string& url, const std::string& zipPath, const std::string& user, const std::string& pass, std::uint64_t titleId, const std::string& note, std::string& error)
+    bool UploadZipMultipart(const std::string& url, const std::string& zipPath, const std::string& user, const std::string& pass, std::uint64_t titleId, const std::string& saveType, const std::string& note, std::string& error)
     {
         error.clear();
         if (curl_global_init(CURL_GLOBAL_ALL) != CURLE_OK) {
@@ -1106,6 +1129,10 @@ namespace {
         curl_mime_data(part, titleIdText.c_str(), CURL_ZERO_TERMINATED);
 
         part = curl_mime_addpart(mime);
+        curl_mime_name(part, "save_type");
+        curl_mime_data(part, saveType.c_str(), CURL_ZERO_TERMINATED);
+
+        part = curl_mime_addpart(mime);
         curl_mime_name(part, "application_id");
         curl_mime_data(part, titleIdText.c_str(), CURL_ZERO_TERMINATED);
 
@@ -1168,12 +1195,27 @@ namespace {
         return true;
     }
 
-    bool MountSaveDataForTitle(const AccountUid& uid, std::uint64_t titleId, bool readOnly, std::string& error)
+    bool MountSaveDataForTitle(const AccountUid& uid, std::uint64_t titleId, bool deviceSave, bool readOnly, std::string& error)
     {
         error.clear();
         fsdevUnmountDevice(kSaveMountName);
-        Result rc = readOnly ? fsdevMountSaveDataReadOnly(kSaveMountName, titleId, uid) : fsdevMountSaveData(kSaveMountName, titleId, uid);
-        if (readOnly && R_FAILED(rc))
+        Result rc;
+        if (deviceSave) {
+            // Device saves have no account UID. Prefer a read-only filesystem
+            // for backups, as with account saves.
+            FsFileSystem fs = {};
+            FsSaveDataAttribute attr = {};
+            attr.application_id = titleId;
+            attr.save_data_type = FsSaveDataType_Device;
+            rc = readOnly ? fsOpenReadOnlySaveDataFileSystem(&fs, FsSaveDataSpaceId_User, &attr)
+                          : fsOpen_DeviceSaveData(&fs, titleId);
+            if (readOnly && R_FAILED(rc)) rc = fsOpen_DeviceSaveData(&fs, titleId);
+            if (R_SUCCEEDED(rc) && fsdevMountDevice(kSaveMountName, fs) == -1)
+                rc = MAKERESULT(Module_Libnx, LibnxError_OutOfMemory);
+        } else {
+            rc = readOnly ? fsdevMountSaveDataReadOnly(kSaveMountName, titleId, uid) : fsdevMountSaveData(kSaveMountName, titleId, uid);
+        }
+        if (!deviceSave && readOnly && R_FAILED(rc))
             rc = fsdevMountSaveData(kSaveMountName, titleId, uid);
         if (R_FAILED(rc)) {
             error = "Failed to mount save data (" + FormatResultHex(rc) + ").";
@@ -1191,7 +1233,7 @@ namespace inst::save_sync {
         warning.clear();
 
         const std::string baseUrl = NormalizeRemoteUrl(remoteUrl);
-        const std::string listUrl = BuildRemoteListUrl(remoteUrl);
+        const std::string listUrl = BuildRemoteListUrl(remoteUrl).empty() ? "" : BuildRemoteListUrl(remoteUrl) + "?save_types=1";
         if (listUrl.empty())
             return true;
 
@@ -1260,6 +1302,9 @@ namespace inst::save_sync {
                 item.titleId = titleId;
                 item.hasTitleId = true;
                 item.saveId = saveId;
+                std::string saveType;
+                TryGetStringByKeys(save, {"save_type", "saveType"}, saveType);
+                item.saveType = NormalizeBackupSaveType(saveType);
                 item.saveNote = note;
                 item.saveCreatedAt = createdAt;
                 item.saveCreatedTs = createdTs;
@@ -1278,31 +1323,33 @@ namespace inst::save_sync {
         warning.clear();
         outEntries.clear();
 
-        std::unordered_map<std::uint64_t, SaveSyncEntry> entriesByTitleId;
+        std::map<SaveEntryKey, SaveSyncEntry> entriesByTitleId;
 
         AccountUid targetUid = {};
         std::string userError;
-        if (ResolveRequestedOrActiveUser(uid, targetUid, userError)) {
-            std::string localWarning;
-            EnumerateLocalSaves(targetUid, entriesByTitleId, localWarning);
-            if (!localWarning.empty())
-                warning = localWarning;
-        } else {
+        if (!ResolveRequestedOrActiveUser(uid, targetUid, userError))
             warning = userError;
-        }
+        // Shared device saves remain discoverable even without a user account.
+        std::string localWarning;
+        EnumerateLocalSaves(targetUid, entriesByTitleId, localWarning);
+        if (!localWarning.empty()) warning = localWarning;
 
         for (const auto& item : remoteItems) {
             std::uint64_t titleId = 0;
             if (!ResolveRemoteTitleId(item, titleId))
                 continue;
 
-            auto& entry = entriesByTitleId[titleId];
+            const std::string saveType = NormalizeBackupSaveType(item.saveType);
+            auto& entry = entriesByTitleId[{titleId, saveType}];
             entry.titleId = titleId;
+            entry.saveType = saveType;
+            entry.deviceSave = saveType == "device";
             if (!item.name.empty())
                 entry.titleName = item.name;
 
             SaveSyncRemoteVersion version;
             version.saveId = NormalizeSaveIdToken(item.saveId);
+            version.saveType = saveType;
             version.note = TrimAscii(item.saveNote);
             version.createdAt = TrimAscii(item.saveCreatedAt);
             version.createdTs = item.saveCreatedTs;
@@ -1371,8 +1418,27 @@ namespace inst::save_sync {
             return false;
         }
 
+        if (!CanRestoreSaveType(entry.saveType, entry.deviceSave ? "device" : "account")) {
+            error = "Select an account or device save before uploading.";
+            return false;
+        }
+        // Probe before packaging: older servers would silently store typed
+        // uploads as unknown and could mix their latest-save directories.
+        long capabilityCode = 0;
+        std::string capabilityBody;
+        if (!HttpGetWithAuth(NormalizeRemoteUrl(remoteUrl) + "/api/saves/capabilities", user, pass,
+                capabilityCode, capabilityBody, error)) {
+            if (capabilityCode == 404) error = "Update AeroFoil to a version with account/device save-type support before uploading.";
+            return false;
+        }
+        const auto capabilities = nlohmann::json::parse(capabilityBody, nullptr, false);
+        if (!capabilities.is_object() || !capabilities.contains("save_types") || capabilities["save_types"] != true) {
+            error = "This server does not support account/device save types. Update AeroFoil before uploading.";
+            return false;
+        }
+
         AccountUid targetUid = {};
-        if (!ResolveRequestedOrActiveUser(uid, targetUid, error))
+        if (!entry.deviceSave && !ResolveRequestedOrActiveUser(uid, targetUid, error))
             return false;
 
         const std::string tempRoot = inst::config::appDir + "/save_sync_tmp";
@@ -1383,7 +1449,7 @@ namespace inst::save_sync {
 
         const std::string mountedPath = std::string(kSaveMountName) + ":/";
 
-        if (!MountSaveDataForTitle(targetUid, entry.titleId, true, error))
+        if (!MountSaveDataForTitle(targetUid, entry.titleId, entry.deviceSave, true, error))
             return false;
 
         inst::ui::instPage::setTopInstInfoText("inst.remote.save_sync.title"_lang);
@@ -1413,7 +1479,7 @@ namespace inst::save_sync {
             return false;
         }
 
-        if (!UploadZipMultipart(uploadUrl, archivePath.string(), user, pass, entry.titleId, note, error))
+        if (!UploadZipMultipart(uploadUrl, archivePath.string(), user, pass, entry.titleId, entry.saveType, note, error))
             return false;
 
         std::filesystem::remove_all(tempRoot, ec);
@@ -1430,6 +1496,10 @@ namespace inst::save_sync {
     bool DownloadSaveToConsole(const std::string& remoteUrl, const std::string& user, const std::string& pass, const SaveSyncEntry& entry, const SaveSyncRemoteVersion* remoteVersion, std::string& error)
     {
         error.clear();
+        if (entry.saveType == "unknown") {
+            error = "This backup has no save type. Download it from AeroFoil and reupload it with Account or Device selected before restoring.";
+            return false;
+        }
         if (entry.titleId == 0) {
             error = "Invalid title ID for save download.";
             return false;
@@ -1442,6 +1512,11 @@ namespace inst::save_sync {
         const SaveSyncRemoteVersion* selectedRemoteVersion = remoteVersion;
         if (!selectedRemoteVersion && !entry.remoteVersions.empty())
             selectedRemoteVersion = &entry.remoteVersions.front();
+
+        if (selectedRemoteVersion && !CanRestoreSaveType(selectedRemoteVersion->saveType, entry.saveType)) {
+            error = "The backup save type does not match the local save. Restore canceled.";
+            return false;
+        }
 
         std::string selectedSaveId;
         std::string downloadUrl = entry.remoteDownloadUrl;
@@ -1459,6 +1534,7 @@ namespace inst::save_sync {
             error = "No download URL available for this save.";
             return false;
         }
+        downloadUrl = ScopeSaveUrl(downloadUrl, entry.saveType);
 
         const std::string tempRoot = inst::config::appDir + "/save_sync_tmp";
         const std::filesystem::path archivePath = std::filesystem::path(tempRoot) / (FormatTitleIdHex(entry.titleId) + ".zip");
@@ -1468,17 +1544,17 @@ namespace inst::save_sync {
 
         inst::ui::instPage::setInstBarPerc(10);
         inst::ui::instPage::setProgressDetailText("inst.remote.save_sync.progress.starting_download"_lang);
-        if (!HttpDownloadFileWithAuthAndProgress(downloadUrl, archivePath.string(), user, pass, 60000, error)) {
+        if (!HttpDownloadFileWithAuthAndProgress(downloadUrl, archivePath.string(), user, pass, 60000, entry.saveType, error)) {
             if (error.empty())
                 error = "Failed to download save archive from server.";
             return false;
         }
 
         AccountUid uid = {};
-        if (!ResolveActiveUser(uid, error))
+        if (!entry.deviceSave && !ResolveActiveUser(uid, error))
             return false;
 
-        if (!MountSaveDataForTitle(uid, entry.titleId, false, error))
+        if (!MountSaveDataForTitle(uid, entry.titleId, entry.deviceSave, false, error))
             return false;
 
         const std::string mountedPath = std::string(kSaveMountName) + ":/";
@@ -1499,7 +1575,7 @@ namespace inst::save_sync {
         fsdevUnmountDevice(kSaveMountName);
 
         // Match JKSV restore flow: remount fresh after wipe+commit, then import.
-        if (!MountSaveDataForTitle(uid, entry.titleId, false, error))
+        if (!MountSaveDataForTitle(uid, entry.titleId, entry.deviceSave, false, error))
             return false;
 
         auto extractProgressCb = [](std::size_t index, std::size_t total, const std::string& relativePath) {
@@ -1548,6 +1624,10 @@ namespace inst::save_sync {
         if (selectedRemoteVersion && !selectedRemoteVersion->saveId.empty())
             selectedSaveId = selectedRemoteVersion->saveId;
 
+        if (selectedRemoteVersion && NormalizeBackupSaveType(selectedRemoteVersion->saveType) != entry.saveType) {
+            error = "The selected backup belongs to a different save type. Delete canceled.";
+            return false;
+        }
         std::string deleteUrl = BuildDeleteUrl(remoteUrl, entry.titleId, selectedSaveId);
         if (deleteUrl.empty())
             deleteUrl = BuildDeleteUrl(remoteUrl, entry.titleId);
@@ -1555,6 +1635,7 @@ namespace inst::save_sync {
             error = "No delete URL available for this save.";
             return false;
         }
+        deleteUrl = ScopeSaveUrl(deleteUrl, entry.saveType);
 
         long responseCode = 0;
         std::string responseBody;

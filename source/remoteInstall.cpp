@@ -1315,6 +1315,10 @@ namespace {
                             item.saveId = entry["save_id"].get<std::string>();
                         else if (entry.contains("saveId") && entry["saveId"].is_string())
                             item.saveId = entry["saveId"].get<std::string>();
+                        if (entry.contains("save_type") && entry["save_type"].is_string())
+                            item.saveType = entry["save_type"].get<std::string>();
+                        else if (entry.contains("saveType") && entry["saveType"].is_string())
+                            item.saveType = entry["saveType"].get<std::string>();
                         if (entry.contains("note") && entry["note"].is_string())
                             item.saveNote = entry["note"].get<std::string>();
                         else if (entry.contains("save_note") && entry["save_note"].is_string())
@@ -1721,6 +1725,10 @@ namespace remoteInstStuff {
                     item.saveId = entry["save_id"].get<std::string>();
                 else if (entry.contains("saveId") && entry["saveId"].is_string())
                     item.saveId = entry["saveId"].get<std::string>();
+                if (entry.contains("save_type") && entry["save_type"].is_string())
+                    item.saveType = entry["save_type"].get<std::string>();
+                else if (entry.contains("saveType") && entry["saveType"].is_string())
+                    item.saveType = entry["saveType"].get<std::string>();
                 if (entry.contains("note") && entry["note"].is_string())
                     item.saveNote = entry["note"].get<std::string>();
                 else if (entry.contains("save_note") && entry["save_note"].is_string())

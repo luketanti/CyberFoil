@@ -2632,6 +2632,8 @@ namespace inst::ui {
         for (const auto& entry : this->saveSyncEntries) {
             remoteInstStuff::RemoteItem item;
             item.name = entry.titleName;
+            item.name += entry.saveType == "device" ? " [Device]" : (entry.saveType == "account" ? " [Account]" : " [Unknown type]");
+            item.saveType = entry.saveType;
             if (entry.localAvailable && entry.remoteAvailable) {
                 if (entry.remoteVersions.size() > 1) {
                     item.name += " [Console + Server x" + std::to_string(entry.remoteVersions.size()) + "]";
@@ -2669,7 +2671,7 @@ namespace inst::ui {
         this->remoteSections.push_back(std::move(saveSection));
     }
 
-    void remoteInstPage::refreshSaveSyncSection(std::uint64_t selectedTitleId, int previousSectionIndex) {
+    void remoteInstPage::refreshSaveSyncSection(std::uint64_t selectedTitleId, int previousSectionIndex, const std::string& selectedSaveType) {
         this->buildSaveSyncSection(this->activeRemoteUrl);
 
         int saveSectionIndex = -1;
@@ -2702,7 +2704,8 @@ namespace inst::ui {
         if (this->isSaveSyncSection() && !this->visibleItems.empty()) {
             int restoredIndex = 0;
             for (std::size_t i = 0; i < this->visibleItems.size(); i++) {
-                if (this->visibleItems[i].hasTitleId && this->visibleItems[i].titleId == selectedTitleId) {
+                if (this->visibleItems[i].hasTitleId && this->visibleItems[i].titleId == selectedTitleId &&
+                        this->visibleItems[i].saveType == selectedSaveType) {
                     restoredIndex = static_cast<int>(i);
                     break;
                 }
@@ -2734,6 +2737,7 @@ namespace inst::ui {
             return false;
 
         this->saveVersionSelectorTitleId = entry.titleId;
+        this->saveVersionSelectorSaveType = entry.saveType;
         this->saveVersionSelectorTitleName = entry.titleName;
         this->saveVersionSelectorLocalAvailable = entry.localAvailable;
         this->saveVersionSelectorDeleteMode = deleteMode;
@@ -2850,7 +2854,7 @@ namespace inst::ui {
                 return true;
 
             auto it = std::find_if(this->saveSyncEntries.begin(), this->saveSyncEntries.end(), [&](const auto& entry) {
-                return entry.titleId == this->saveVersionSelectorTitleId;
+                return entry.titleId == this->saveVersionSelectorTitleId && entry.saveType == this->saveVersionSelectorSaveType;
             });
             if (it == this->saveSyncEntries.end()) {
                 this->closeSaveVersionSelector(true);
@@ -2862,7 +2866,8 @@ namespace inst::ui {
                 if (!this->saveVersionSelectorDeleteMode) {
                     const int overwriteChoice = mainApp->CreateShowDialog(
                         "inst.remote.save_sync.title"_lang,
-                        "inst.remote.save_sync.dialog.replace_local_prompt"_lang,
+                        "inst.remote.save_sync.dialog.replace_local_prompt"_lang +
+                            (it->deviceSave ? "\nThis device save is shared by all users on this console." : ""),
                         {"common.yes"_lang, "common.no"_lang},
                         false);
                     if (overwriteChoice != 0)
@@ -2918,9 +2923,10 @@ namespace inst::ui {
 
             mainApp->CreateShowDialog("inst.remote.save_sync.title"_lang, this->saveVersionSelectorDeleteMode ? "inst.remote.save_sync.dialog.deleted_success"_lang : "inst.remote.save_sync.dialog.downloaded_success"_lang, {"common.ok"_lang}, true);
             const std::uint64_t selectedTitleId = this->saveVersionSelectorTitleId;
+            const std::string selectedSaveType = this->saveVersionSelectorSaveType;
             const int previousSectionIndex = this->saveVersionSelectorPreviousSectionIndex;
             this->closeSaveVersionSelector(false);
-            this->refreshSaveSyncSection(selectedTitleId, previousSectionIndex);
+            this->refreshSaveSyncSection(selectedTitleId, previousSectionIndex, selectedSaveType);
             return true;
         }
 
@@ -2936,7 +2942,7 @@ namespace inst::ui {
             return;
 
         auto it = std::find_if(this->saveSyncEntries.begin(), this->saveSyncEntries.end(), [&](const auto& entry) {
-            return entry.titleId == selectedItem.titleId;
+            return entry.titleId == selectedItem.titleId && entry.saveType == selectedItem.saveType;
         });
         if (it == this->saveSyncEntries.end()) {
             mainApp->CreateShowDialog("inst.remote.save_sync.title"_lang, "inst.remote.save_sync.dialog.unable_resolve_entry"_lang, {"common.ok"_lang}, true);
@@ -2944,6 +2950,7 @@ namespace inst::ui {
         }
 
         const std::uint64_t selectedTitleId = it->titleId;
+        const std::string selectedSaveType = it->saveType;
         int previousSectionIndex = this->selectedSectionIndex;
         if (previousSectionIndex < 0)
             previousSectionIndex = 0;
@@ -2992,7 +2999,8 @@ namespace inst::ui {
         if (actions[choice] == 2 && it->localAvailable) {
             const int overwriteChoice = mainApp->CreateShowDialog(
                 "inst.remote.save_sync.title"_lang,
-                "inst.remote.save_sync.dialog.replace_local_prompt"_lang,
+                "inst.remote.save_sync.dialog.replace_local_prompt"_lang +
+                    (it->deviceSave ? "\nThis device save is shared by all users on this console." : ""),
                 {"common.yes"_lang, "common.no"_lang},
                 false);
             if (overwriteChoice != 0)
@@ -3053,7 +3061,7 @@ namespace inst::ui {
         else if (actions[choice] == 3)
             successMessage = "inst.remote.save_sync.dialog.deleted_success"_lang;
         mainApp->CreateShowDialog("inst.remote.save_sync.title"_lang, successMessage, {"common.ok"_lang}, true);
-        this->refreshSaveSyncSection(selectedTitleId, previousSectionIndex);
+        this->refreshSaveSyncSection(selectedTitleId, previousSectionIndex, selectedSaveType);
     }
 
     void remoteInstPage::buildLegacyOwnedSections() {

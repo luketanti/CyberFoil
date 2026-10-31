@@ -517,8 +517,8 @@ namespace inst::ui {
         std::vector<BackupUserChoice> users;
         std::string userError;
         if (!ListBackupUsers(users, userError)) {
-            mainApp->CreateShowDialog("main.menu.backup"_lang, userError.empty() ? "Unable to read user accounts." : userError, {"common.ok"_lang}, true);
-            return;
+            // Device saves do not require an account to be present.
+            users.push_back({{}, "Device (shared saves)", true});
         }
 
         std::vector<std::string> userLabels;
@@ -574,7 +574,7 @@ namespace inst::ui {
         inst::save_sync::FetchRemoteSaveItems(remoteUrl, inst::config::remoteUser, inst::config::remotePass, remoteSaveItems, remoteFetchWarning);
 
         inst::ui::instPage::setInstInfoText("Scanning local saves...");
-        inst::ui::instPage::setProgressDetailText("Reading saves for selected user...");
+        inst::ui::instPage::setProgressDetailText("Reading user and shared device saves...");
         inst::ui::instPage::setInstBarPerc(45);
 
         std::vector<inst::save_sync::SaveSyncEntry> entries;
@@ -599,7 +599,7 @@ namespace inst::ui {
             mainApp->LoadLayout(mainApp->mainPage);
             mainApp->CreateShowDialog(
                 "main.menu.backup"_lang,
-                "No local save data found for the active user.\nLaunch games once to create save data, then retry.",
+                "No local user or device save data found.\nLaunch games once to create save data, then retry.",
                 {"common.ok"_lang},
                 true);
             return;
@@ -624,7 +624,7 @@ namespace inst::ui {
             "main.menu.backup"_lang,
             "Upload all local saves to the server now?\n"
             "Remote: " + inst::util::shortenString(remoteDisplayName, 86, false) + "\n"
-            "Saves to upload: " + std::to_string(localEntries.size()),
+            "Saves to upload: " + std::to_string(localEntries.size()) + "\nIncludes shared device saves.",
             {"Upload All", "common.cancel"_lang},
             false);
         if (confirm != 0)
@@ -643,7 +643,8 @@ namespace inst::ui {
             const auto* entry = localEntries[i];
             const std::size_t current = i + 1;
             const int progress = static_cast<int>((current * 100) / localEntries.size());
-            const std::string titleName = entry->titleName.empty() ? "Unknown title" : entry->titleName;
+            const std::string titleName = (entry->titleName.empty() ? "Unknown title" : entry->titleName) +
+                (entry->deviceSave ? " [Device]" : "");
             inst::ui::instPage::setInstallIconFromTitleId(entry->titleId);
             inst::ui::instPage::setInstInfoText("Uploading " + std::to_string(current) + "/" + std::to_string(localEntries.size()) + ": " + inst::util::shortenString(titleName, 64, false));
             inst::ui::instPage::setProgressDetailText(inst::util::shortenString(titleName, 68, false));

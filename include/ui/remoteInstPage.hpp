@@ -185,6 +185,7 @@ namespace inst::ui {
             std::atomic<bool> iconDownloadUiDirty{false};
             bool saveVersionSelectorVisible = false;
             std::uint64_t saveVersionSelectorTitleId = 0;
+            std::string saveVersionSelectorSaveType = "unknown";
             bool saveVersionSelectorLocalAvailable = false;
             bool saveVersionSelectorDeleteMode = false;
             int saveVersionSelectorPreviousSectionIndex = 0;
@@ -310,7 +311,7 @@ namespace inst::ui {
             void ensureSaveSyncSectionLoaded();
             void showInstalledDetails();
             void buildSaveSyncSection(const std::string& remoteUrl);
-            void refreshSaveSyncSection(std::uint64_t selectedTitleId, int previousSectionIndex);
+            void refreshSaveSyncSection(std::uint64_t selectedTitleId, int previousSectionIndex, const std::string& selectedSaveType);
             bool openSaveVersionSelector(const inst::save_sync::SaveSyncEntry& entry, int previousSectionIndex, bool deleteMode = false);
             void closeSaveVersionSelector(bool refreshList);
             void refreshSaveVersionSelectorDetailText();
