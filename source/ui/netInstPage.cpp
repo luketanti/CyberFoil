@@ -11,6 +11,7 @@
 #include "ui/bottomHint.hpp"
 
 #include "util/theme.hpp"
+#include "util/file_selection.hpp"
 
 #define COLOR(hex) inst::theme::Palette(hex)
 
@@ -124,11 +125,9 @@ namespace inst::ui {
     }
 
     void netInstPage::selectTitle(int selectedIndex) {
-        if (this->menu->GetItems()[selectedIndex]->GetIcon() == inst::theme::Asset("romfs:/images/icons/check-box-outline.png")) {
-            for (long unsigned int i = 0; i < this->selectedUrls.size(); i++) {
-                if (this->selectedUrls[i] == this->ourUrls[selectedIndex]) this->selectedUrls.erase(this->selectedUrls.begin() + i);
-            }
-        } else this->selectedUrls.push_back(this->ourUrls[selectedIndex]);
+        const auto fileIndex = inst::util::FileRowIndex(selectedIndex, 0, ourUrls.size());
+        if (!fileIndex) return;
+        inst::util::ToggleFileSelection(selectedUrls, ourUrls[*fileIndex]);
         this->drawMenuItems(false);
     }
 
@@ -232,10 +231,7 @@ namespace inst::ui {
         if ((Down & HidNpadButton_Y)) {
             if (this->selectedUrls.size() == this->menu->GetItems().size()) this->drawMenuItems(true);
             else {
-                for (long unsigned int i = 0; i < this->menu->GetItems().size(); i++) {
-                    if (this->menu->GetItems()[i]->GetIcon() == inst::theme::Asset("romfs:/images/icons/check-box-outline.png")) continue;
-                    else this->selectTitle(i);
-                }
+                this->selectedUrls = this->ourUrls;
                 this->drawMenuItems(false);
             }
         }

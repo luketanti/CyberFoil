@@ -9,6 +9,7 @@
 #include "ui/bottomHint.hpp"
 
 #include "util/theme.hpp"
+#include "util/file_selection.hpp"
 
 #define COLOR(hex) inst::theme::Palette(hex)
 
@@ -158,21 +159,15 @@ namespace inst::ui {
     }
 
     void sdInstPage::selectNsp(int selectedIndex) {
-        if (queueAddMode) {
-            int fileIndex = selectedIndex - static_cast<int>(ourDirectories.size()) - (currentDir != "sdmc:/" ? 1 : 0);
-            if (fileIndex < 0 || fileIndex >= static_cast<int>(ourFiles.size()) || !instPage::canEnqueueTitle(ourFiles[fileIndex].string())) return;
-        }
-        int dirListSize = this->ourDirectories.size();
-        if (this->currentDir != "sdmc:/") dirListSize++;
-        if (this->menu->GetItems()[selectedIndex]->GetIcon() == inst::theme::Asset("romfs:/images/icons/check-box-outline.png")) {
-            for (long unsigned int i = 0; i < this->selectedTitles.size(); i++) {
-                if (this->selectedTitles[i] == this->ourFiles[selectedIndex - dirListSize]) this->selectedTitles.erase(this->selectedTitles.begin() + i);
-            }
-        } else if (this->menu->GetItems()[selectedIndex]->GetIcon() == inst::theme::Asset("romfs:/images/icons/checkbox-blank-outline.png")) this->selectedTitles.push_back(this->ourFiles[selectedIndex - dirListSize]);
-        else {
-            this->followDirectory();
+        if (selectedIndex < 0 || selectedIndex >= static_cast<int>(this->menu->GetItems().size())) return;
+        const auto directoryRows = ourDirectories.size() + (currentDir != "sdmc:/" ? 1 : 0);
+        const auto fileIndex = inst::util::FileRowIndex(selectedIndex, directoryRows, ourFiles.size());
+        if (!fileIndex) {
+            if (static_cast<std::size_t>(selectedIndex) < directoryRows) this->followDirectory();
             return;
         }
+        if (queueAddMode && !instPage::canEnqueueTitle(ourFiles[*fileIndex].string())) return;
+        inst::util::ToggleFileSelection(selectedTitles, ourFiles[*fileIndex]);
         this->drawMenuItems(false, currentDir);
     }
 
@@ -280,12 +275,7 @@ namespace inst::ui {
         if ((Down & HidNpadButton_Y)) {
             if (this->selectedTitles.size() == this->ourFiles.size()) this->drawMenuItems(true, currentDir);
             else {
-                int topDir = 0;
-                if (this->currentDir != "sdmc:/") topDir++;
-                for (long unsigned int i = this->ourDirectories.size() + topDir; i < this->menu->GetItems().size(); i++) {
-                    if (this->menu->GetItems()[i]->GetIcon() == inst::theme::Asset("romfs:/images/icons/check-box-outline.png")) continue;
-                    else this->selectNsp(i);
-                }
+                this->selectedTitles = this->ourFiles;
                 this->drawMenuItems(false, currentDir);
             }
         }
@@ -293,7 +283,8 @@ namespace inst::ui {
             inst::ui::mainApp->CreateShowDialog("inst.sd.help.title"_lang, "inst.sd.help.desc"_lang, {"common.ok"_lang}, true);
         }
         if (Down & HidNpadButton_Plus) {
-            if (this->selectedTitles.size() == 0 && this->menu->GetItems()[this->menu->GetSelectedIndex()]->GetIcon() == inst::theme::Asset("romfs:/images/icons/checkbox-blank-outline.png")) {
+            if (this->selectedTitles.empty() && inst::util::FileRowIndex(this->menu->GetSelectedIndex(),
+                    ourDirectories.size() + (currentDir != "sdmc:/" ? 1 : 0), ourFiles.size())) {
                 this->selectNsp(this->menu->GetSelectedIndex());
             }
             if (this->selectedTitles.size() > 0) this->startInstall();

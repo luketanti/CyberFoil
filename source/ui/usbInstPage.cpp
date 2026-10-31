@@ -9,6 +9,7 @@
 
 
 #include "util/theme.hpp"
+#include "util/file_selection.hpp"
 
 #define COLOR(hex) inst::theme::Palette(hex)
 
@@ -118,11 +119,9 @@ namespace inst::ui {
     }
 
     void usbInstPage::selectTitle(int selectedIndex) {
-        if (this->menu->GetItems()[selectedIndex]->GetIcon() == inst::theme::Asset("romfs:/images/icons/check-box-outline.png")) {
-            for (long unsigned int i = 0; i < this->selectedTitles.size(); i++) {
-                if (this->selectedTitles[i] == this->ourTitles[selectedIndex]) this->selectedTitles.erase(this->selectedTitles.begin() + i);
-            }
-        } else this->selectedTitles.push_back(this->ourTitles[selectedIndex]);
+        const auto fileIndex = inst::util::FileRowIndex(selectedIndex, 0, ourTitles.size());
+        if (!fileIndex) return;
+        inst::util::ToggleFileSelection(selectedTitles, ourTitles[*fileIndex]);
         this->drawMenuItems(false);
     }
 
@@ -223,10 +222,7 @@ namespace inst::ui {
         if ((Down & HidNpadButton_Y)) {
             if (this->selectedTitles.size() == this->menu->GetItems().size()) this->drawMenuItems(true);
             else {
-                for (long unsigned int i = 0; i < this->menu->GetItems().size(); i++) {
-                    if (this->menu->GetItems()[i]->GetIcon() == inst::theme::Asset("romfs:/images/icons/check-box-outline.png")) continue;
-                    else this->selectTitle(i);
-                }
+                this->selectedTitles = this->ourTitles;
                 this->drawMenuItems(false);
             }
         }
